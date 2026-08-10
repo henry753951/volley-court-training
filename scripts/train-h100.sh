@@ -2,6 +2,14 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+uv_bin="${UV_BIN:-$(command -v uv || true)}"
+if [[ -z "$uv_bin" && -x "$HOME/.local/bin/uv" ]]; then
+  uv_bin="$HOME/.local/bin/uv"
+fi
+if [[ -z "$uv_bin" ]]; then
+  echo "uv was not found; set UV_BIN or install uv under ~/.local/bin" >&2
+  exit 1
+fi
 data="${DATASET_YAML:-$project_root/datasets/court36-color-canonical-v2/dataset.yaml}"
 model="${MODEL:-yolo26m-pose.pt}"
 epochs="${EPOCHS:-300}"
@@ -15,7 +23,7 @@ if [[ ! -f "$data" ]]; then
 fi
 
 cd "$project_root"
-exec uv run court-train \
+exec "$uv_bin" run court-train \
   --data "$data" \
   --model "$model" \
   --epochs "$epochs" \
