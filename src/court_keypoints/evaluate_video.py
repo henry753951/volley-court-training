@@ -20,16 +20,19 @@ from ultralytics import YOLO
 
 COURT_WORLD_POINTS = np.asarray(
     [
-        (0.0, 0.0),
-        (6.0, 0.0),
-        (9.0, 0.0),
-        (12.0, 0.0),
-        (18.0, 0.0),
-        (18.0, 9.0),
-        (12.0, 9.0),
-        (9.0, 9.0),
-        (6.0, 9.0),
+        # The dataset schema walks the left sideline, far baseline, right
+        # sideline, and near baseline. Keep this order identical to kpt_names
+        # in dataset.yaml; it is not a row-major rectangle order.
         (0.0, 9.0),
+        (0.0, 6.0),
+        (0.0, 4.5),
+        (0.0, 3.0),
+        (0.0, 0.0),
+        (18.0, 0.0),
+        (18.0, 3.0),
+        (18.0, 4.5),
+        (18.0, 6.0),
+        (18.0, 9.0),
     ],
     dtype=np.float32,
 )
@@ -61,6 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--conf", type=float, default=0.25)
     parser.add_argument("--point-conf", type=float, default=0.25)
     parser.add_argument("--sheet-columns", type=int, default=4)
+    parser.add_argument("--preview-count", type=int, default=10)
     return parser.parse_args()
 
 
@@ -194,7 +198,12 @@ def main() -> int:
     model = YOLO(str(args.model))
     rows: list[dict[str, Any]] = []
     previews: list[np.ndarray] = []
-    preview_indices = set(np.linspace(0, max(0, total_frames - 1), 12).astype(int).tolist())
+    preview_count = max(0, args.preview_count)
+    preview_indices = (
+        set(np.linspace(0, max(0, total_frames - 1), preview_count).astype(int).tolist())
+        if preview_count
+        else set()
+    )
     frame_index = 0
     try:
         while True:
