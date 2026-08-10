@@ -1,0 +1,43 @@
+[project]
+name = "volleyball-court-keypoints-training"
+version = "0.1.0"
+description = "Symmetry-canonical court keypoint training with fixed video evaluation"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "minio>=7.2.0",
+    "numpy>=2.0",
+    "opencv-python>=4.10",
+    "psycopg[binary]>=3.2.0",
+    "python-dotenv>=1.1.0",
+    "pyyaml>=6.0",
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "ultralytics>=8.4.0",
+    "yt-dlp[curl-cffi,default]>=2026.7.4",
+]
+
+[project.scripts]
+court-download-eval-videos = "court_keypoints.download_eval_videos:main"
+court-evaluate-video = "court_keypoints.evaluate_video:main"
+court-prepare-dataset = "court_keypoints.prepare_dataset:main"
+court-train = "court_keypoints.train:main"
+court-visualize-dataset = "court_keypoints.dataset_visualization:main"
+
+[tool.uv]
+package = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.setuptools.packages.find]
+where = ["src"]

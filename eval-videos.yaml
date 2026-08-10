@@ -1,0 +1,18 @@
+version: 1
+policy:
+  max_height: 720
+  prefer_highest_fps: true
+  youtube_player_client: android_vr
+  compatibility_tiebreakers:
+    - h264
+    - aac
+videos:
+  - id: pW66S38FAQM
+    url: https://www.youtube.com/watch?v=pW66S38FAQM
+    file: artifacts/eval-videos/pW66S38FAQM.mp4
+  - id: rMvxEtorQhw
+    url: https://www.youtube.com/watch?v=rMvxEtorQhw
+    file: artifacts/eval-videos/rMvxEtorQhw.mp4
+  - id: gdrSr-Vso90
+    url: https://www.youtube.com/watch?v=gdrSr-Vso90
+    file: artifacts/eval-videos/gdrSr-Vso90.mp4
