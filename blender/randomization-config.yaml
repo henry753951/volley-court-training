@@ -96,6 +96,9 @@ materials:
   surface_noise_detail: [2.0, 8.0]
 
 arena:
+  # Optional experiment override. Keep empty for weighted random selection.
+  # Set to "sky_sphere" to force the generated 360-degree arena panorama.
+  forced_profile: ""
   profiles:
     none:
       stars: "★★★★☆"
@@ -109,6 +112,10 @@ arena:
     yellow_grandstand:
       stars: "★★★★☆"
       weight: 22
+    sky_sphere:
+      # Disabled in the normal 2,000-image mix until the experiment is approved.
+      stars: "☆☆☆☆☆"
+      weight: 0
   small_gym_bilateral_probability: 0.72
   left_side_probability: 0.50
   led_dropout_probability: 0.06
@@ -143,6 +150,16 @@ arena:
     small_gym_density: [0.25, 0.82]
     scale: [0.86, 1.14]
     rotation_degrees: [-18.0, 18.0]
+  sky_sphere:
+    # Blender World Normal coordinates require this fixed panorama orientation.
+    orientation_degrees: [180.0, 0.0, 0.0]
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.65, 0.95]
+    assets:
+      indoor_volleyball_arena_360_v1:
+        stars: "★★★★★"
+        weight: 1
+        path: "assets/sky_spheres/indoor-volleyball-arena-360-v1.png"
 
 camera:
   requested_partial_probability: 0.18
@@ -500,21 +517,23 @@ capture:
   blur_modes:
     none:
       stars: "★★★★★"
-      weight: 44
+      # Broadcast wide shots normally keep the full court and arena legible.
+      weight: 64
     motion:
       stars: "★★★★☆"
-      weight: 24
+      weight: 22
     whip_pan:
       stars: "★★★☆☆"
-      weight: 14
+      weight: 12
     defocus:
-      stars: "★★★☆☆"
-      weight: 18
+      # Rare autofocus miss; no longer a routine broadcast appearance.
+      stars: "★☆☆☆☆"
+      weight: 2
   motion_blur_radii: [1, 1, 2, 2, 3, 4]
   motion_blur_angle_degrees: [-12.0, 12.0]
   whip_pan_reference_radii_720p: [6, 7, 8, 9, 10, 12, 14]
   whip_pan_angle_degrees: [-3.5, 3.5]
-  defocus_radii: [1, 1, 2, 2, 3]
+  defocus_radii: [1, 1, 1, 2]
   sensor_noise_sigma: [0.0010, 0.0070]
   strong_noise_probability: 0.12
   strong_noise_multiplier: [1.4, 2.0]

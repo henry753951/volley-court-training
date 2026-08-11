@@ -27,6 +27,13 @@ BASE_SEGMENTS = (
     (3, 6),
 )
 
+CANONICAL_CAMERA_MODES = (
+    "ENDLINE",
+    "SIDELINE",
+    "DIAGONAL_BOTTOM_RIGHT",
+    "DIAGONAL_TOP_RIGHT",
+)
+
 
 def expanded_skeleton() -> tuple[tuple[int, int], ...]:
     edges: list[tuple[int, int]] = []
@@ -46,7 +53,13 @@ def parse_label(path: Path, width: int, height: int) -> tuple[np.ndarray, np.nda
     return points, raw[:, 2].astype(np.int32)
 
 
-def draw(image: np.ndarray, points: np.ndarray, visibility: np.ndarray) -> np.ndarray:
+def draw(
+    image: np.ndarray,
+    points: np.ndarray,
+    visibility: np.ndarray,
+    *,
+    title: str = "",
+) -> np.ndarray:
     output = image.copy()
     for start, end in expanded_skeleton():
         if visibility[start] > 0 and visibility[end] > 0:
@@ -70,7 +83,10 @@ def draw(image: np.ndarray, points: np.ndarray, visibility: np.ndarray) -> np.nd
     occluded = int((visibility == 1).sum())
     outside = int((visibility == 0).sum())
     cv2.rectangle(output, (0, 0), (output.shape[1], 42), (6, 10, 17), -1)
-    cv2.putText(output, f"visible={visible}  occluded={occluded}  outside={outside}", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (245, 247, 250), 2, cv2.LINE_AA)
+    summary = f"visible={visible}  occluded={occluded}  outside={outside}"
+    if title:
+        summary = f"{title}  {summary}"
+    cv2.putText(output, summary, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (245, 247, 250), 2, cv2.LINE_AA)
     return output
 
 
@@ -80,6 +96,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=12)
     parser.add_argument("--seed", type=int, default=20260811)
+    parser.add_argument(
+        "--one-per-camera-mode",
+        action="store_true",
+        help="select exactly one metadata-backed sample from each of the four canonical camera modes",
+    )
     args = parser.parse_args()
     pairs: list[tuple[Path, Path]] = []
     for split in ("train", "valid", "test"):
@@ -89,8 +110,32 @@ def main() -> int:
             label_path = label_dir / f"{image_path.stem}.txt"
             if label_path.is_file():
                 pairs.append((image_path, label_path))
-    random.Random(args.seed).shuffle(pairs)
-    pairs = pairs[: args.limit]
+    camera_modes: dict[str, str] = {}
+    if args.one_per_camera_mode:
+        selected: dict[str, tuple[tuple[int, int], tuple[Path, Path]]] = {}
+        for image_path, label_path in pairs:
+            metadata_path = image_path.parent.parent / "metadata" / f"{image_path.stem}.json"
+            if not metadata_path.is_file():
+                continue
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            mode = str(metadata.get("canonical_camera_mode", ""))
+            camera_modes[image_path.stem] = mode
+            keypoints = metadata.get("keypoints", [])
+            score = (
+                sum(int(point.get("visibility", 0)) > 0 for point in keypoints),
+                sum(int(point.get("visibility", 0)) == 2 for point in keypoints),
+            )
+            if mode in CANONICAL_CAMERA_MODES and (
+                mode not in selected or score > selected[mode][0]
+            ):
+                selected[mode] = (score, (image_path, label_path))
+        missing = [mode for mode in CANONICAL_CAMERA_MODES if mode not in selected]
+        if missing:
+            raise RuntimeError(f"dataset has no visualization sample for camera modes: {missing}")
+        pairs = [selected[mode][1] for mode in CANONICAL_CAMERA_MODES]
+    else:
+        random.Random(args.seed).shuffle(pairs)
+        pairs = pairs[: args.limit]
     if not pairs:
         raise FileNotFoundError(f"no image/label pairs found under {args.dataset}")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -101,11 +146,12 @@ def main() -> int:
         if image is None:
             raise RuntimeError(f"cannot read {image_path}")
         points, visibility = parse_label(label_path, image.shape[1], image.shape[0])
-        rendered = draw(image, points, visibility)
+        mode = camera_modes.get(image_path.stem, "")
+        rendered = draw(image, points, visibility, title=mode)
         destination = args.output / f"sample_{index + 1:03d}_{image_path.stem}.jpg"
         cv2.imwrite(str(destination), rendered, [cv2.IMWRITE_JPEG_QUALITY, 94])
         previews.append(cv2.resize(rendered, (640, 360), interpolation=cv2.INTER_AREA))
-        rows.append({"image": str(image_path.resolve()), "label": str(label_path.resolve()), "visualization": str(destination.resolve())})
+        rows.append({"image": str(image_path.resolve()), "label": str(label_path.resolve()), "canonical_camera_mode": mode, "visualization": str(destination.resolve())})
     blank = np.zeros_like(previews[0])
     while len(previews) % 3:
         previews.append(blank)

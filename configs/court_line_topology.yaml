@@ -1,0 +1,20 @@
+version: 1
+keypoint_count: 36
+usable_visibility:
+  - 1
+  - 2
+line_groups:
+  - points: [0, 10, 11, 1, 12, 13, 2, 14, 15, 3, 16, 17, 4]
+    endpoint_indices: [0, 4]
+  - points: [4, 18, 19, 5]
+    endpoint_indices: [4, 5]
+  - points: [5, 20, 21, 6, 22, 23, 7, 24, 25, 8, 26, 27, 9]
+    endpoint_indices: [5, 9]
+  - points: [9, 28, 29, 0]
+    endpoint_indices: [9, 0]
+  - points: [1, 30, 31, 8]
+    endpoint_indices: [1, 8]
+  - points: [2, 32, 33, 7]
+    endpoint_indices: [2, 7]
+  - points: [3, 34, 35, 6]
+    endpoint_indices: [3, 6]
