@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="680" viewBox="0 0 1000 680" role="img" aria-labelledby="title desc">
+  <title id="title">排球場八個拍攝方位映射到四種標準點序</title>
+  <desc id="desc">上下直拍合併、左右側拍合併、左上與右下斜拍合併、右上與左下斜拍合併。</desc>
+  <rect width="1000" height="680" fill="#f8fafc"/>
+  <text x="500" y="42" text-anchor="middle" font-family="sans-serif" font-size="28" font-weight="700" fill="#0f172a">8 個實際方位 → 4 種標準點序</text>
+  <text x="500" y="72" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#475569">只合併相差 180° 的方位；鏡像斜拍不得合併</text>
+  <rect x="250" y="150" width="500" height="280" rx="8" fill="#e98b4c" stroke="#9a3412" stroke-width="3"/>
+  <line x1="250" y1="290" x2="750" y2="290" stroke="white" stroke-width="4"/>
+  <line x1="250" y1="220" x2="750" y2="220" stroke="white" stroke-width="2"/>
+  <line x1="250" y1="360" x2="750" y2="360" stroke="white" stroke-width="2"/>
+  <g font-family="sans-serif" font-size="15" font-weight="700" text-anchor="middle">
+    <g fill="#166534"><circle cx="205" cy="105" r="25"/><text x="205" y="111" fill="white">左上</text><circle cx="795" cy="475" r="25"/><text x="795" y="481" fill="white">右下</text></g>
+    <g fill="#1d4ed8"><circle cx="795" cy="105" r="25"/><text x="795" y="111" fill="white">右上</text><circle cx="205" cy="475" r="25"/><text x="205" y="481" fill="white">左下</text></g>
+    <g fill="#7c3aed"><circle cx="500" cy="105" r="25"/><text x="500" y="111" fill="white">上方</text><circle cx="500" cy="475" r="25"/><text x="500" y="481" fill="white">下方</text></g>
+    <g fill="#b45309"><circle cx="205" cy="290" r="25"/><text x="205" y="296" fill="white">左側</text><circle cx="795" cy="290" r="25"/><text x="795" y="296" fill="white">右側</text></g>
+  </g>
+  <g font-family="sans-serif" font-size="15" font-weight="700">
+    <rect x="95" y="555" width="185" height="58" rx="10" fill="#ede9fe"/><text x="187" y="579" text-anchor="middle" fill="#5b21b6">直拍</text><text x="187" y="600" text-anchor="middle" fill="#5b21b6">上方 = 下方</text>
+    <rect x="305" y="555" width="185" height="58" rx="10" fill="#ffedd5"/><text x="397" y="579" text-anchor="middle" fill="#9a3412">側拍</text><text x="397" y="600" text-anchor="middle" fill="#9a3412">左側 = 右側</text>
+    <rect x="515" y="555" width="185" height="58" rx="10" fill="#dcfce7"/><text x="607" y="579" text-anchor="middle" fill="#166534">右下斜拍 \</text><text x="607" y="600" text-anchor="middle" fill="#166534">左上 = 右下</text>
+    <rect x="725" y="555" width="185" height="58" rx="10" fill="#dbeafe"/><text x="817" y="579" text-anchor="middle" fill="#1d4ed8">右上斜拍 /</text><text x="817" y="600" text-anchor="middle" fill="#1d4ed8">右上 = 左下</text>
+  </g>
+</svg>

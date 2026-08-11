@@ -1,0 +1,99 @@
+version: 2
+method: "visual review of each panorama plus rendered 50-image contact sheet; source arenas.yaml used only as a semantic hint"
+notes:
+  source_yaml_origin_uv_rejected: true
+  reason: "the repeated 0.72 origin value did not match the observed floor boundary, which varies by arena"
+  projection_model: "Blender World equirectangular environment"
+  distance_control: "mapping_scale Z is an apparent-distance correction; World environments have no effective sphere radius"
+  focus_policy: "background remains broad-focus; rare full-frame defocus is controlled by capture.blur_modes"
+assets:
+  arena_01:
+    image: "arena_01.png"
+    arena_type: "compact_small"
+    source_floor_boundary_uv: 0.575
+    mapping_location: [0.0, 0.0, -0.015]
+    mapping_scale: [1.0, 1.0, 1.28]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.82, 1.04]
+  arena_02:
+    image: "arena_02.png"
+    arena_type: "compact_small"
+    source_floor_boundary_uv: 0.545
+    mapping_location: [0.0, 0.0, 0.015]
+    mapping_scale: [1.0, 1.0, 1.30]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.84, 1.06]
+  arena_03:
+    image: "arena_03.png"
+    arena_type: "medium_standard"
+    source_floor_boundary_uv: 0.555
+    mapping_location: [0.0, 0.0, 0.005]
+    mapping_scale: [1.0, 1.0, 1.18]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.88, 1.10]
+  arena_04:
+    image: "arena_04.png"
+    arena_type: "medium_standard"
+    source_floor_boundary_uv: 0.555
+    mapping_location: [0.0, 0.0, 0.005]
+    mapping_scale: [1.0, 1.0, 1.20]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.86, 1.08]
+  arena_05:
+    image: "arena_05.png"
+    arena_type: "large_multicourt"
+    source_floor_boundary_uv: 0.545
+    mapping_location: [0.0, 0.0, 0.015]
+    mapping_scale: [1.0, 1.0, 1.12]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.84, 1.05]
+  arena_06:
+    image: "arena_06.png"
+    arena_type: "large_multicourt"
+    source_floor_boundary_uv: 0.535
+    mapping_location: [0.0, 0.0, 0.025]
+    mapping_scale: [1.0, 1.0, 1.10]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.80, 1.00]
+  arena_07:
+    image: "arena_07.png"
+    arena_type: "large_arena"
+    source_floor_boundary_uv: 0.620
+    mapping_location: [0.0, 0.0, -0.050]
+    mapping_scale: [1.0, 1.0, 1.30]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.90, 1.12]
+  arena_08:
+    image: "arena_08.png"
+    arena_type: "large_arena"
+    source_floor_boundary_uv: 0.600
+    mapping_location: [0.0, 0.0, -0.035]
+    mapping_scale: [1.0, 1.0, 1.16]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.88, 1.08]
+  arena_09:
+    image: "arena_09.png"
+    arena_type: "compact_local"
+    source_floor_boundary_uv: 0.560
+    mapping_location: [0.0, 0.0, 0.000]
+    mapping_scale: [1.0, 1.0, 1.32]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.84, 1.05]
+  arena_10:
+    image: "arena_10.png"
+    arena_type: "medium_large"
+    source_floor_boundary_uv: 0.550
+    mapping_location: [0.0, 0.0, 0.010]
+    mapping_scale: [1.0, 1.0, 1.22]
+    yaw_offset_degrees: 0.0
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.84, 1.05]

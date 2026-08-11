@@ -1,0 +1,229 @@
+version: 1
+projection: equirectangular
+usage: blender_world_environment
+color_space: sRGB
+notes:
+  - "These are LDR PNG environment/background panoramas, not true HDR lighting maps."
+  - "The lower ground region is intentionally matte black because the playable interior will be rendered in Blender."
+  - "All floor/placement values below are semantic hints, not metric camera calibration."
+arenas:
+  - id: arena_01
+    image: images/arena_01.png
+    type: compact_small
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate
+  - id: arena_02
+    image: images/arena_02.png
+    type: compact_small
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate
+  - id: arena_03
+    image: images/arena_03.png
+    type: medium_standard
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate
+  - id: arena_04
+    image: images/arena_04.png
+    type: medium_standard
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate
+  - id: arena_05
+    image: images/arena_05.png
+    type: large_multicourt
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate
+  - id: arena_06
+    image: images/arena_06.png
+    type: large_multicourt
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate
+  - id: arena_07
+    image: images/arena_07.png
+    type: large_arena
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate
+  - id: arena_08
+    image: images/arena_08.png
+    type: large_arena
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate
+  - id: arena_09
+    image: images/arena_09.png
+    type: compact_local
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate
+  - id: arena_10
+    image: images/arena_10.png
+    type: medium_large
+    resolution: [1774, 887]
+    projection: equirectangular
+    blender:
+      texture_type: Environment Texture
+      mapping: Equirectangular
+      recommended_strength: 1.0
+      color_space: sRGB
+    floor_region:
+      mode: matte_black
+      purpose: "reserved for Blender-generated court/interior geometry"
+      approximate_uv_polygon:
+        - [0.00, 0.55]
+        - [1.00, 0.55]
+        - [1.00, 1.00]
+        - [0.00, 1.00]
+    arena_plane_hint:
+      recommended_origin_uv: [0.50, 0.72]
+      recommended_front_yaw_deg: 0
+      confidence: approximate

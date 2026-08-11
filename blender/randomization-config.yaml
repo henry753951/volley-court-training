@@ -1,0 +1,565 @@
+schema: "court36-blender-randomization-v1"
+
+# exact: use each entry's numeric weight and preserve the current distribution.
+# stars: ignore numeric weight and translate stars through star_weights.
+selection_weight_mode: "exact"
+star_weights:
+  "☆☆☆☆☆": 0
+  "★☆☆☆☆": 1
+  "★★☆☆☆": 2
+  "★★★☆☆": 4
+  "★★★★☆": 8
+  "★★★★★": 16
+
+generation:
+  output: "datasets/court36-synthetic-blender-yaml-v1"
+  count: 2000
+  seed: 20260811
+  resolution_x: 1280
+  resolution_y: 720
+  minimum_resolution_y: 480
+  samples: 48
+  engine: "BLENDER_EEVEE"
+  capture_randomization: true
+
+splits:
+  train:
+    stars: "★★★★★"
+    weight: 80
+  valid:
+    stars: "★★☆☆☆"
+    weight: 10
+  test:
+    stars: "★★☆☆☆"
+    weight: 10
+
+scene:
+  player_pool_size: 36
+  distraction_pool_size: 8
+  net_heights:
+    women:
+      stars: "★★★★☆"
+      weight: 1
+      value_m: 2.24
+    men:
+      stars: "★★★★☆"
+      weight: 1
+      value_m: 2.43
+
+materials:
+  palettes:
+    international_orange_teal:
+      stars: "★★★★★"
+      weight: 6
+      court: [0.82, 0.24, 0.10, 1.0]
+      surround: [0.02, 0.42, 0.48, 1.0]
+      team_a: [0.04, 0.22, 0.65, 1.0]
+      team_b: [0.85, 0.08, 0.06, 1.0]
+    blue_orange:
+      stars: "★★★☆☆"
+      weight: 3
+      court: [0.93, 0.38, 0.08, 1.0]
+      surround: [0.03, 0.20, 0.58, 1.0]
+      team_a: [0.92, 0.92, 0.94, 1.0]
+      team_b: [0.08, 0.10, 0.18, 1.0]
+    turquoise_coral:
+      stars: "★★★★★"
+      weight: 5
+      court: [0.94, 0.34, 0.27, 1.0]
+      surround: [0.02, 0.54, 0.58, 1.0]
+      team_a: [0.05, 0.25, 0.85, 1.0]
+      team_b: [0.98, 0.75, 0.04, 1.0]
+    wood_blue:
+      stars: "★☆☆☆☆"
+      weight: 1
+      court: [0.55, 0.24, 0.07, 1.0]
+      surround: [0.03, 0.25, 0.50, 1.0]
+      team_a: [0.88, 0.05, 0.08, 1.0]
+      team_b: [0.96, 0.96, 0.96, 1.0]
+    red_navy:
+      stars: "★☆☆☆☆"
+      weight: 1
+      court: [0.63, 0.05, 0.08, 1.0]
+      surround: [0.02, 0.08, 0.20, 1.0]
+      team_a: [0.95, 0.74, 0.02, 1.0]
+      team_b: [0.04, 0.46, 0.78, 1.0]
+  court_color_noise_strength: [0.08, 0.22]
+  surround_color_noise_strength: [0.10, 0.25]
+  # Lower roughness produces stronger polished-floor reflections.
+  court_roughness: [0.24, 0.42]
+  surround_roughness: [0.27, 0.46]
+  court_coat_weight: [0.18, 0.34]
+  surround_coat_weight: [0.12, 0.28]
+  court_coat_roughness: [0.14, 0.28]
+  surround_coat_roughness: [0.18, 0.34]
+  surface_noise_scale: [2.5, 18.0]
+  surface_noise_detail: [2.0, 8.0]
+
+arena:
+  # Optional experiment override. Keep empty for weighted random selection.
+  # Set to "sky_sphere" to force the generated 360-degree arena panorama.
+  forced_profile: ""
+  profiles:
+    none:
+      stars: "★★★★☆"
+      weight: 24
+    championship:
+      stars: "★★★★★"
+      weight: 30
+    small_gym:
+      stars: "★★★★☆"
+      weight: 24
+    yellow_grandstand:
+      stars: "★★★★☆"
+      weight: 22
+    sky_sphere:
+      # Disabled in the normal 2,000-image mix until the experiment is approved.
+      stars: "☆☆☆☆☆"
+      weight: 0
+  small_gym_bilateral_probability: 0.72
+  left_side_probability: 0.50
+  led_dropout_probability: 0.06
+  advertising_variants:
+    variant_0:
+      stars: "★★★☆☆"
+      weight: 1
+      index: 0
+    variant_1:
+      stars: "★★★☆☆"
+      weight: 1
+      index: 1
+    variant_2:
+      stars: "★★★☆☆"
+      weight: 1
+      index: 2
+    variant_3:
+      stars: "★★★☆☆"
+      weight: 1
+      index: 3
+    variant_4:
+      stars: "★★★☆☆"
+      weight: 1
+      index: 4
+    variant_5:
+      stars: "★★★☆☆"
+      weight: 1
+      index: 5
+  audience:
+    championship_density: [0.42, 0.96]
+    yellow_grandstand_density: [0.20, 0.78]
+    small_gym_density: [0.25, 0.82]
+    scale: [0.86, 1.14]
+    rotation_degrees: [-18.0, 18.0]
+  sky_sphere:
+    # Blender World Normal coordinates require this fixed panorama orientation.
+    orientation_degrees: [180.0, 0.0, 0.0]
+    rotation_degrees: [-180.0, 180.0]
+    strength_multiplier: [0.65, 0.95]
+    assets:
+      indoor_volleyball_arena_360_v1:
+        stars: "★★★★★"
+        weight: 1
+        path: "assets/sky_spheres/indoor-volleyball-arena-360-v1.png"
+
+camera:
+  requested_partial_probability: 0.18
+  maximum_sampling_attempts: 120
+  left_side_probability: 0.50
+  near_end_probability: 0.50
+  far_server_probability: 0.50
+  server_focus_left_probability: 0.50
+  corner_far_probability: 0.50
+  modes:
+    championship_main:
+      stars: "★★★★★"
+      weight: 46
+      lens_mm: [32.0, 46.0]
+      shift_scale: 0.015
+      roll_degrees: [-0.45, 0.45]
+      min_base_keypoints: 8
+      min_total_keypoints: 28
+      left_x: [-10.8, -7.0]
+      right_x: [16.0, 19.8]
+      y: [8.25, 9.75]
+      z: [4.8, 8.6]
+    broadcast_sideline:
+      stars: "★★★☆☆"
+      weight: 10
+      lens_mm: [26.0, 72.0]
+      shift_scale: 0.055
+      roll_degrees: [-1.5, 1.5]
+      min_base_keypoints: 7
+      min_total_keypoints: 24
+      left_x: [-11.5, -7.5]
+      right_x: [16.5, 20.5]
+      y: [6.5, 11.5]
+      z: [6.5, 12.5]
+    diagonal_sideline:
+      stars: "★★☆☆☆"
+      weight: 6
+      lens_mm: [26.0, 72.0]
+      shift_scale: 0.055
+      roll_degrees: [-1.5, 1.5]
+      min_base_keypoints: 7
+      min_total_keypoints: 24
+      left_x: [-10.0, -5.5]
+      right_x: [14.5, 19.0]
+      y: [1.0, 17.0]
+      z: [4.0, 13.0]
+    endline:
+      stars: "★★☆☆☆"
+      weight: 6
+      lens_mm: [26.0, 72.0]
+      shift_scale: 0.055
+      roll_degrees: [-1.5, 1.5]
+      min_base_keypoints: 7
+      min_total_keypoints: 24
+      x: [1.0, 8.0]
+      small_gym_near_y: [22.0, 25.5]
+      small_gym_far_y: [-7.5, -4.0]
+      other_near_y: [24.0, 32.0]
+      other_far_y: [-14.0, -7.0]
+      z: [4.5, 14.0]
+    server_wide:
+      stars: "★★☆☆☆"
+      weight: 6
+      lens_mm: [26.0, 42.0]
+      shift_scale: 0.055
+      roll_degrees: [-1.5, 1.5]
+      min_base_keypoints: 2
+      min_total_keypoints: 6
+      left_x: [-10.5, -7.0]
+      right_x: [16.0, 19.5]
+      far_camera_y: [2.0, 7.0]
+      near_camera_y: [11.0, 16.0]
+      camera_z: [4.0, 8.5]
+      focus_x: [0.6, 8.4]
+      far_focus_y: -2.0
+      near_focus_y: 20.0
+      focus_z: [1.15, 1.55]
+    server_closeup:
+      stars: "★★☆☆☆"
+      weight: 6
+      lens_mm: [50.0, 75.0]
+      shift_scale: 0.055
+      roll_degrees: [-1.5, 1.5]
+      min_base_keypoints: 1
+      min_total_keypoints: 2
+      left_x: [-10.5, -7.0]
+      right_x: [16.0, 19.5]
+      far_camera_y: [1.0, 6.0]
+      near_camera_y: [12.0, 17.0]
+      camera_z: [5.5, 9.0]
+      focus_x: [0.6, 8.4]
+      far_focus_y: -2.0
+      near_focus_y: 20.0
+      focus_z: [1.20, 1.60]
+    net_aligned_server_pan:
+      stars: "★★★☆☆"
+      weight: 12
+      lens_mm: [44.0, 76.0]
+      shift_scale: 0.085
+      roll_degrees: [-3.2, 3.2]
+      min_base_keypoints: 1
+      min_total_keypoints: 2
+      left_x: [-8.0, -4.0]
+      right_x: [13.0, 17.0]
+      camera_y: [8.85, 9.15]
+      camera_height_above_net: [0.15, 0.85]
+      left_focus_x: [0.25, 1.20]
+      right_focus_x: [7.80, 8.75]
+      far_focus_y: -2.2
+      near_focus_y: 20.2
+      focus_z: [1.20, 1.60]
+    handheld_sideline:
+      stars: "★☆☆☆☆"
+      weight: 3
+      lens_mm: [26.0, 72.0]
+      shift_scale: 0.055
+      roll_degrees: [-1.5, 1.5]
+      min_base_keypoints: 7
+      min_total_keypoints: 24
+      left_x: [-6.0, -2.0]
+      right_x: [11.0, 15.0]
+      y: [2.0, 16.0]
+      z: [2.0, 5.0]
+    corner:
+      stars: "★☆☆☆☆"
+      weight: 3
+      lens_mm: [26.0, 72.0]
+      shift_scale: 0.055
+      roll_degrees: [-1.5, 1.5]
+      min_base_keypoints: 7
+      min_total_keypoints: 24
+      left_x: [-10.5, -6.0]
+      right_x: [15.0, 19.5]
+      small_gym_far_y: [-7.5, -4.0]
+      small_gym_near_y: [22.0, 25.5]
+      other_far_y: [-14.0, -5.0]
+      other_near_y: [23.0, 32.0]
+      z: [6.0, 17.0]
+    overhead:
+      stars: "★☆☆☆☆"
+      weight: 2
+      lens_mm: [26.0, 72.0]
+      shift_scale: 0.055
+      roll_degrees: [-1.5, 1.5]
+      min_base_keypoints: 7
+      min_total_keypoints: 24
+      x: [1.0, 8.0]
+      y: [4.0, 14.0]
+      z: [18.0, 30.0]
+  sensor_width_mm: [30.0, 38.0]
+  shift_y_ratio: 0.82
+  target_jitter:
+    championship_main_x: [-0.25, 0.25]
+    championship_main_y: [-0.55, 0.55]
+    championship_main_z: [0.28, 0.58]
+    broadcast_sideline_x: [-0.5, 0.5]
+    broadcast_sideline_y: [-1.6, 1.6]
+    broadcast_sideline_z: [0.25, 0.75]
+    other_x: [-1.7, 1.7]
+    other_y: [-3.0, 3.0]
+    other_z: [0.1, 0.9]
+  partial_acceptance:
+    min_base_keypoints: 4
+    min_total_keypoints: 12
+  fallback:
+    location: [-8.5, 9.0, 7.0]
+    lens_mm: 42.0
+    sensor_width_mm: 36.0
+    target_z: 0.35
+
+players:
+  patterns:
+    normal_match:
+      stars: "★★★★★"
+      weight: 48
+      count: [8, 14]
+    net_cluster:
+      stars: "★★★☆☆"
+      weight: 24
+      count: [16, 30]
+    sideline_cluster:
+      stars: "★★★☆☆"
+      weight: 15
+      count: [14, 28]
+    two_team_huddles:
+      stars: "★★☆☆☆"
+      weight: 13
+      count: [18, 32]
+    server_with_clutter:
+      stars: "★★★★☆"
+      weight: 0
+      forced_by_server_camera: true
+      count: [10, 26]
+  forced_blocker_count: [1, 4]
+  sideline_cluster_left_probability: 0.50
+  height_scale: [0.92, 1.10]
+  rotation_degrees: [-180.0, 180.0]
+  blocker_ray_height: [0.95, 1.45]
+  blocker_alpha: [0.045, 0.24]
+  net_cluster:
+    probability: 0.78
+    center_x: 4.5
+    sigma_x: 2.4
+    clip_x: [-0.5, 9.5]
+    center_y: 9.0
+    sigma_y: 1.05
+    clip_y: [7.0, 11.0]
+  sideline_cluster:
+    probability: 0.82
+    left_center_x: -1.2
+    right_center_x: 10.2
+    center_y: [4.0, 14.0]
+    sigma_x: 0.72
+    sigma_y: 1.85
+  two_team_huddles:
+    probability: 0.88
+    team_a_center: [2.25, 5.8]
+    team_b_center: [6.75, 12.2]
+    sigma_x: 0.68
+    sigma_y: 0.78
+  server_with_clutter:
+    cluster_probability: 0.30
+    net_cluster_probability: 0.55
+    far_baseline_probability: 0.50
+    net_y: 8.9
+    baseline_y: [1.0, 17.0]
+    x: [-0.5, 9.5]
+    sigma_y: 0.95
+  fallback:
+    inside_probability: 0.62
+    outside_sides:
+      left:
+        stars: "★★☆☆☆"
+        weight: 1
+      right:
+        stars: "★★☆☆☆"
+        weight: 1
+      far:
+        stars: "★★☆☆☆"
+        weight: 1
+      near:
+        stars: "★★☆☆☆"
+        weight: 1
+    inside_x: [0.35, 8.65]
+    inside_y: [0.5, 17.5]
+    left_x: [-5.0, -0.5]
+    right_x: [9.5, 14.0]
+    side_y: [-2.0, 20.0]
+    far_x: [-2.0, 11.0]
+    far_y: [-6.0, -0.5]
+    near_x: [-2.0, 11.0]
+    near_y: [18.5, 24.0]
+
+distractions:
+  active_count: [1, 8]
+  inside_probability: 0.35
+  outside_sides:
+    left:
+      stars: "★★★☆☆"
+      weight: 1
+    right:
+      stars: "★★★☆☆"
+      weight: 1
+    far:
+      stars: "★★★☆☆"
+      weight: 1
+    near:
+      stars: "★★★☆☆"
+      weight: 1
+  inside:
+    x: [0.45, 8.55]
+    y: [0.6, 17.4]
+    z: [0.30, 0.72]
+    rotation_degrees: [-180.0, 180.0]
+    size_x: [0.35, 1.2]
+    size_y: [0.25, 0.8]
+    size_z: [0.45, 1.35]
+  outside:
+    left_x: [-3.0, -0.4]
+    right_x: [9.4, 12.0]
+    side_y: [-1.0, 19.0]
+    far_x: [-1.0, 10.0]
+    far_y: [-3.0, -0.4]
+    near_x: [-1.0, 10.0]
+    near_y: [18.4, 21.0]
+    z: [0.35, 0.8]
+    rotation_degrees: [-8.0, 8.0]
+    size_x: [0.8, 2.4]
+    size_y: [0.12, 0.38]
+    size_z: [0.65, 1.55]
+
+lighting:
+  # Brighter indoor broadcast range with more pronounced floor highlights.
+  enable_eevee_raytracing: true
+  eevee_raytracing_method: "SCREEN"
+  sun_energy: [1.00, 2.40]
+  sun_rotation_degrees: [-180.0, 180.0]
+  area_light_energy: [1300.0, 2600.0]
+  area_light_red: [0.82, 1.0]
+  area_light_green: [0.86, 1.0]
+  area_light_blue: [0.90, 1.0]
+  world_strength: [0.45, 0.82]
+  exposure: [0.16, 0.72]
+
+capture:
+  resolution_heights:
+    height_480:
+      stars: "★★★★☆"
+      weight: 1
+      value: 480
+    height_540:
+      stars: "★★★★☆"
+      weight: 1
+      value: 540
+    height_576:
+      stars: "★★★★☆"
+      weight: 1
+      value: 576
+    height_720:
+      stars: "★★★★☆"
+      weight: 1
+      value: 720
+  filters:
+    neutral:
+      stars: "★★★★★"
+      weight: 46
+    warm_broadcast:
+      stars: "★★★☆☆"
+      weight: 15
+    cool_broadcast:
+      stars: "★★★☆☆"
+      weight: 15
+    green_cast:
+      stars: "★★☆☆☆"
+      weight: 7
+    magenta_cast:
+      stars: "★★☆☆☆"
+      weight: 7
+    washed_broadcast:
+      stars: "★★★☆☆"
+      weight: 10
+  base_channel_gain: [0.985, 1.015]
+  exposure_offset: [-0.18, 0.18]
+  gamma: [0.96, 1.04]
+  warm_red_gain: [1.025, 1.075]
+  warm_blue_gain: [0.925, 0.985]
+  cool_red_gain: [0.94, 0.99]
+  cool_blue_gain: [1.025, 1.075]
+  green_gain: [1.025, 1.060]
+  magenta_red_gain: [1.015, 1.045]
+  magenta_green_gain: [0.955, 0.985]
+  magenta_blue_gain: [1.015, 1.045]
+  washed_exposure_add: [0.05, 0.18]
+  washed_gamma_multiplier: [1.015, 1.055]
+  blur_modes:
+    none:
+      stars: "★★★★★"
+      # Broadcast wide shots normally keep the full court and arena legible.
+      weight: 64
+    motion:
+      stars: "★★★★☆"
+      weight: 22
+    whip_pan:
+      stars: "★★★☆☆"
+      weight: 12
+    defocus:
+      # Rare autofocus miss; no longer a routine broadcast appearance.
+      stars: "★☆☆☆☆"
+      weight: 2
+  motion_blur_radii: [1, 1, 2, 2, 3, 4]
+  motion_blur_angle_degrees: [-12.0, 12.0]
+  whip_pan_reference_radii_720p: [6, 7, 8, 9, 10, 12, 14]
+  whip_pan_angle_degrees: [-3.5, 3.5]
+  defocus_radii: [1, 1, 1, 2]
+  sensor_noise_sigma: [0.0010, 0.0070]
+  strong_noise_probability: 0.12
+  strong_noise_multiplier: [1.4, 2.0]
+  jpeg_quality: [48, 95]
+  white_balance_temperature: [5350.0, 7550.0]
+  white_balance_tint: [1.0, 19.0]
+  chromatic_shift:
+    shift_0:
+      stars: "★★★★★"
+      weight: 76
+      pixels: 0
+    shift_1:
+      stars: "★★★★☆"
+      weight: 21
+      pixels: 1
+    shift_2:
+      stars: "★☆☆☆☆"
+      weight: 3
+      pixels: 2
+  vignette_strength: [0.0, 0.10]
+  fake_ui:
+    enabled_probability: 0.18
+    left_probability: 0.90
+    width: [0.17, 0.255]
+    height_ratio: [0.37, 0.46]
+    horizontal_margin: [0.008, 0.025]
+    top: [0.0, 0.025]
+    sets: [0, 2]
+    points: [0, 25]
