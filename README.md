@@ -24,11 +24,11 @@ with optical flow, so the overlay does not lag between layout-matcher passes.
 The published wheel is the simplest internal installation path:
 
 ```bash
-uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.0/volley_court_lines-0.1.0-py3-none-any.whl"
+uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.1/volley_court_lines-0.1.1-py3-none-any.whl"
 ```
 
 ```bash
-pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.0/volley_court_lines-0.1.0-py3-none-any.whl"
+pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.1/volley_court_lines-0.1.1-py3-none-any.whl"
 ```
 
 For development:

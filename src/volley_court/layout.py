@@ -374,6 +374,69 @@ def _candidate_homographies(
                             yield homography
 
 
+def _prior_refined_homographies(
+    prior_homography: np.ndarray,
+    vertical: Sequence[ObservedLine],
+    horizontal: Sequence[ObservedLine],
+    width: int,
+    height: int,
+) -> Iterable[np.ndarray]:
+    """Refit a prior topology to the current frame's observed line equations."""
+
+    rows, _score, _matched = _match_projected_lines(
+        prior_homography,
+        vertical,
+        horizontal,
+        width,
+        height,
+    )
+    observed_by_index = {line.index: line for line in (*vertical, *horizontal)}
+    matched_by_topology = {
+        int(row["topology_index"]): observed_by_index[int(source_index)]
+        for row in rows
+        if (source_index := row.get("source_index")) is not None
+        and int(source_index) in observed_by_index
+    }
+    left = matched_by_topology.get(0)
+    right = matched_by_topology.get(2)
+    if left is None or right is None:
+        return
+
+    horizontal_y = {1: 18.0, 3: 0.0, 4: 6.0, 5: 9.0, 6: 12.0}
+    matched_horizontal = [
+        (topology, matched_by_topology[topology])
+        for topology in horizontal_y
+        if topology in matched_by_topology
+    ]
+    for (first_topology, first), (second_topology, second) in itertools.combinations(
+        matched_horizontal, 2
+    ):
+        intersections = (
+            _intersection(left, first),
+            _intersection(right, first),
+            _intersection(left, second),
+            _intersection(right, second),
+        )
+        if any(point is None for point in intersections):
+            continue
+        destination = np.asarray(intersections, dtype=np.float32)
+        polygon = destination[[0, 1, 3, 2]].reshape(-1, 1, 2)
+        if abs(float(cv2.contourArea(polygon))) < 16.0:
+            continue
+        source = np.asarray(
+            (
+                (0.0, horizontal_y[first_topology]),
+                (9.0, horizontal_y[first_topology]),
+                (0.0, horizontal_y[second_topology]),
+                (9.0, horizontal_y[second_topology]),
+            ),
+            dtype=np.float32,
+        )
+        homography = cv2.getPerspectiveTransform(source, destination)
+        if np.isfinite(homography).all():
+            yield homography
+
+
 def _keypoint_parents() -> tuple[tuple[int, ...], ...]:
     line_points = (
         (0, 10, 11, 1, 12, 13, 2, 14, 15, 3, 16, 17, 4),
@@ -404,6 +467,8 @@ def match_court_layout(
     minimum_hypothesis_margin: float | None = None,
     minimum_semantic_alignment: float = 0.22,
     minimum_semantic_matched_lines: int = 5,
+    prior_homography: Sequence[Sequence[float]] | np.ndarray | None = None,
+    maximum_prior_displacement_ratio: float = 0.12,
 ) -> dict[str, Any]:
     """Fit the seven-line court template and recover the original Pose36 indices."""
 
@@ -433,28 +498,89 @@ def match_court_layout(
             + 0.5 * abs(len(row[1]) - 5)
         )
     )
-    for vertical, horizontal in directed_assignments[:8]:
-        for homography in _candidate_homographies(vertical, horizontal):
-            convention = _court_convention_score(homography)
-            if convention < 1.0:
-                continue
-            line_rows, line_score, matched = _match_projected_lines(
-                homography,
+    matcher_mode = "full_search"
+    hypotheses_evaluated = 0
+    prior = None
+    prior_points = None
+    maximum_displacement = maximum_prior_displacement_ratio * math.hypot(width, height)
+    if prior_homography is not None:
+        candidate_prior = np.asarray(prior_homography, dtype=np.float64)
+        if candidate_prior.shape == (3, 3) and np.isfinite(candidate_prior).all():
+            prior = candidate_prior
+
+    if prior is not None:
+        prior_points = _project_points(prior, CANONICAL_KEYPOINTS)
+        for vertical, horizontal in directed_assignments[:8]:
+            for homography in _prior_refined_homographies(
+                prior,
                 vertical,
                 horizontal,
                 width,
                 height,
-            )
-            score = 0.92 * line_score + 0.08 * convention
-            hypotheses.append(
-                (score, matched, homography, line_rows, list(vertical), list(horizontal))
-            )
+            ):
+                hypotheses_evaluated += 1
+                convention = _court_convention_score(homography)
+                if convention < 1.0:
+                    continue
+                candidate_points = _project_points(homography, CANONICAL_KEYPOINTS)
+                if prior_points is None or candidate_points is None:
+                    continue
+                displacement = float(
+                    np.median(np.linalg.norm(candidate_points - prior_points, axis=1))
+                )
+                if displacement > maximum_displacement:
+                    continue
+                line_rows, line_score, matched = _match_projected_lines(
+                    homography,
+                    vertical,
+                    horizontal,
+                    width,
+                    height,
+                )
+                score = 0.92 * line_score + 0.08 * convention
+                hypotheses.append(
+                    (score, matched, homography, line_rows, list(vertical), list(horizontal))
+                )
+        if hypotheses and max(row[1] for row in hypotheses) >= minimum_matched_lines:
+            matcher_mode = "prior_refined"
+        else:
+            hypotheses.clear()
+
+    if not hypotheses:
+        for vertical, horizontal in directed_assignments[:8]:
+            for homography in _candidate_homographies(vertical, horizontal):
+                hypotheses_evaluated += 1
+                convention = _court_convention_score(homography)
+                if convention < 1.0:
+                    continue
+                if prior_points is not None:
+                    candidate_points = _project_points(homography, CANONICAL_KEYPOINTS)
+                    if candidate_points is None:
+                        continue
+                    displacement = float(
+                        np.median(np.linalg.norm(candidate_points - prior_points, axis=1))
+                    )
+                    if displacement > maximum_displacement:
+                        continue
+                line_rows, line_score, matched = _match_projected_lines(
+                    homography,
+                    vertical,
+                    horizontal,
+                    width,
+                    height,
+                )
+                score = 0.92 * line_score + 0.08 * convention
+                hypotheses.append(
+                    (score, matched, homography, line_rows, list(vertical), list(horizontal))
+                )
     if not hypotheses:
         return {
             "status": "abstained",
             "reason": "no valid court homography hypothesis",
             "family_separation_degrees": separation,
             "layout_score": 0.0,
+            "matcher_mode": matcher_mode,
+            "hypotheses_evaluated": hypotheses_evaluated,
             "keypoints": [],
             "lines": [],
         }
@@ -477,7 +603,13 @@ def match_court_layout(
         ),
         None,
     )
-    margin = best[0] - runner_up[0] if runner_up is not None else best[0]
+    margin = (
+        best[0]
+        if matcher_mode == "prior_refined"
+        else best[0] - runner_up[0]
+        if runner_up is not None
+        else best[0]
+    )
     observed_by_index = {line.index: line for line in observed}
     semantic_scores = []
     for row in best[3]:
@@ -547,6 +679,8 @@ def match_court_layout(
         "semantic_alignment": semantic_alignment,
         "family_separation_degrees": float(separation),
         "matched_line_count": int(best[1]),
+        "matcher_mode": matcher_mode,
+        "hypotheses_evaluated": hypotheses_evaluated,
         "homography": best[2].tolist(),
         "lines": best[3],
         "segments": classified_segments,

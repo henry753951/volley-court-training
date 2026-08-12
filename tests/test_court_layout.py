@@ -31,6 +31,17 @@ def _perspective_segments() -> tuple[list[dict[str, object]], np.ndarray]:
     return rows, homography
 
 
+def _segments_for_homography(homography: np.ndarray) -> list[dict[str, object]]:
+    rows = []
+    for line in CANONICAL_LINES:
+        points = cv2.perspectiveTransform(
+            np.asarray((line.first, line.second), dtype=np.float32).reshape(-1, 1, 2),
+            homography,
+        ).reshape(-1, 2)
+        rows.append({"segment": points.reshape(-1).tolist(), "score": 0.9})
+    return rows
+
+
 def test_canonical_pose36_contract_has_expected_subdivision_coordinates() -> None:
     assert len(CANONICAL_KEYPOINTS) == 36
     assert CANONICAL_KEYPOINTS[0] == (0.0, 0.0)
@@ -50,6 +61,31 @@ def test_perfect_seven_lines_recover_all_numbered_keypoints() -> None:
         expected_homography,
     ).reshape(-1, 2)
     actual = np.asarray([[row["x"], row["y"]] for row in result["keypoints"]])
+    assert float(np.max(np.linalg.norm(actual - expected, axis=1))) < 0.1
+
+
+def test_prior_refines_identity_from_every_current_frame() -> None:
+    rows, prior_homography = _perspective_segments()
+    initial = match_court_layout(rows, 640, 640, minimum_hypothesis_margin=0.0)
+    translation = np.asarray(((1.0, 0.0, 12.0), (0.0, 1.0, 5.0), (0.0, 0.0, 1.0)))
+    current_homography = translation @ prior_homography
+
+    current = match_court_layout(
+        _segments_for_homography(current_homography),
+        640,
+        640,
+        minimum_hypothesis_margin=0.0,
+        prior_homography=initial["homography"],
+    )
+
+    assert current["status"] == "ok"
+    assert current["matcher_mode"] == "prior_refined"
+    assert current["hypotheses_evaluated"] < initial["hypotheses_evaluated"]
+    expected = cv2.perspectiveTransform(
+        np.asarray(CANONICAL_KEYPOINTS, dtype=np.float32).reshape(-1, 1, 2),
+        current_homography,
+    ).reshape(-1, 2)
+    actual = np.asarray([[row["x"], row["y"]] for row in current["keypoints"]])
     assert float(np.max(np.linalg.norm(actual - expected, axis=1))) < 0.1
 
 

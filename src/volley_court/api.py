@@ -138,11 +138,17 @@ class CourtLineModel:
         should_layout = self.config.include_layout if include_layout is None else include_layout
         return [self.attach_layout(result) for result in results] if should_layout else results
 
-    def attach_layout(self, result: CourtFrameResult) -> CourtFrameResult:
+    def attach_layout(
+        self,
+        result: CourtFrameResult,
+        *,
+        prior_layout: CourtLayout | None = None,
+    ) -> CourtFrameResult:
         raw = match_court_layout(
             [line.to_mapping() for line in result.lines],
             result.width,
             result.height,
+            prior_homography=prior_layout.homography if prior_layout is not None else None,
         )
         return result.with_layout(CourtLayout.from_mapping(raw))
 
