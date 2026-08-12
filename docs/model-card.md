@@ -58,6 +58,10 @@ safety behavior, not full-court recall.
 
 ![Five consecutive accepted frames](assets/direct-layout-v2-five-frames.jpg)
 
+The published browser-safe demo was regenerated after the temporal identity matcher update. It runs
+the direct head on all 884 source frames, accepts 769 stable layouts, and abstains on 115
+insufficient views; no frame is marked ambiguous in that demo.
+
 ## Training lineage
 
 The dense production model was first adapted on 2,000 Blender images and 357 real images. The direct

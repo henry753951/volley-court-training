@@ -93,7 +93,7 @@ a fallback and is not recommended for web previews.
 | [v1 rollback checkpoint](https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt) | production rollback only | `b0392c...19e86` |
 | [Synthetic dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-synthetic-combined-2000-camera-mode-v2.tar.gz) | 2,000 Blender images | `5f8fa0...78569` |
 | [Real dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-unified.tar.gz) | 357 real images | `a40be9...12a4c` |
-| [v2 demo video](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2-final.mp4) | 1080p H.264 High/yuv420p/AAC/faststart | `72c8cc...7803` |
+| [v2 demo video](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2-final.mp4) | 1080p H.264 High/yuv420p/AAC/faststart | `fa7b62...1676` |
 
 Full checksums and dataset structure are in [docs/datasets.md](docs/datasets.md).
 
@@ -106,10 +106,12 @@ direct-layout verification, and result construction.
 | --- | ---: | ---: | ---: | ---: |
 | RTX 5070, direct layout | 1 | 106.24 | 73.69 | 12.93 ms p50 / 18.41 ms p95 |
 | H100 NVL, direct layout | 1 | 152.43 | 86.68 | 10.16 ms p50 / 26.17 ms p95 |
-| RTX 5070, 1080p H.264 demo | 8 | 375.28 model/decode | 57.87 end-to-end | layout inferred every frame |
+| RTX 5070, 1080p H.264 demo | 8 | 393.83 model/decode | 62.74 end-to-end | layout inferred every frame |
 
 The H100 and RTX 5070 rows use different source videos and benchmark harness revisions; they are
-operational measurements, not a claim that one GPU is universally faster. See
+operational measurements, not a claim that one GPU is universally faster. The browser-safe demo was
+regenerated after the temporal identity matcher fix: 769 frames were accepted and 115 frames
+abstained, with no ambiguous layout. See
 [docs/benchmarks.md](docs/benchmarks.md) for methodology, raw JSON, memory use, and hardware
 specifications.
 
