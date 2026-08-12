@@ -28,7 +28,7 @@ class ImageTransform:
             dtype=np.float64,
         )
         transformed = (self.matrix @ points.T).T[:, :2]
-        return clip_segment_to_image(transformed.reshape(-1), self.size, self.size)
+        return clip_segment_to_image(transformed.reshape(-1).tolist(), self.size, self.size)
 
     def restore_segment(
         self,
@@ -41,7 +41,7 @@ class ImageTransform:
             dtype=np.float64,
         )
         restored = (self.inverse @ points.T).T[:, :2]
-        return clip_segment_to_image(restored.reshape(-1), width, height)
+        return clip_segment_to_image(restored.reshape(-1).tolist(), width, height)
 
     def restore_point(self, point: Sequence[float]) -> tuple[float, float]:
         value = self.inverse @ np.asarray([point[0], point[1], 1.0], dtype=np.float64)
@@ -177,6 +177,7 @@ def segments_to_targets(
     half_length = torch.zeros((1, grid, grid), dtype=torch.float32)
     family = torch.zeros((grid, grid), dtype=torch.long)
     identity = torch.zeros((grid, grid), dtype=torch.long)
+    identity_heatmap = torch.zeros((7, grid, grid), dtype=torch.float32)
     regression_mask = torch.zeros((1, grid, grid), dtype=torch.float32)
     retained_length: dict[tuple[int, int], float] = {}
     collision_count = 0
@@ -224,9 +225,10 @@ def segments_to_targets(
                 (math.cos(2.0 * theta), math.sin(2.0 * theta))
             )
             family[cell_y, cell_x] = int(segment_families[segment_index]) if segment_families else 0
-            identity[cell_y, cell_x] = (
-                int(segment_identities[segment_index]) if segment_identities else 0
-            )
+            identity_index = int(segment_identities[segment_index]) if segment_identities else 0
+            identity[cell_y, cell_x] = identity_index
+            identity_heatmap[:, cell_y, cell_x] = 0.0
+            identity_heatmap[identity_index, cell_y, cell_x] = 1.0
             half_length[0, cell_y, cell_x] = 0.5 * length / diagonal
             regression_mask[0, cell_y, cell_x] = 1.0
     if court_roi is None:
@@ -246,6 +248,7 @@ def segments_to_targets(
         "regression_mask": regression_mask,
         "family": family,
         "identity": identity,
+        "identity_heatmap": identity_heatmap,
         "court_roi": roi_target,
         "roi_valid": torch.tensor(float(roi_valid), dtype=torch.float32),
         "collision_count": torch.tensor(collision_count, dtype=torch.int64),

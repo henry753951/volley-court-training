@@ -10,6 +10,7 @@ import torch
 
 from .dataset import ImageTransform, warp_to_square
 from .decode import (
+    assign_semantic_line_identities,
     decode_dense_votes,
     decode_dense_votes_cuda,
     decode_predictions,
@@ -105,13 +106,27 @@ def infer_prepared_frames(
         batch_size=prediction.shape[0],
     )
     if selected_decoder == "cuda":
-        decoded_batches = decode_dense_votes_cuda(
-            prediction,
-            stride=model.stride,
-            confidence=confidence,
-            top_k=top_k,
-            image_size=image_size,
-            sample_spacing=sample_spacing,
+        decoded_batches = (
+            [
+                assign_semantic_line_identities(rows, image_size, image_size)
+                for rows in decode_dense_votes_cuda(
+                    prediction,
+                    stride=model.stride,
+                    confidence=confidence,
+                    top_k=top_k,
+                    image_size=image_size,
+                    sample_spacing=sample_spacing,
+                )
+            ]
+            if target_mode == "dense_semantic"
+            else decode_dense_votes_cuda(
+                prediction,
+                stride=model.stride,
+                confidence=confidence,
+                top_k=top_k,
+                image_size=image_size,
+                sample_spacing=sample_spacing,
+            )
         )
     elif selected_decoder == "spatial" and target_mode in {
         "dense_votes",
