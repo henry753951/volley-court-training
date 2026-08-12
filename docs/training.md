@@ -29,11 +29,11 @@ uv run volley-court-convert \
 Inspect the generated previews before training. This is where Pose36 ordering or topology errors
 should be caught.
 
-## Recorded semantic-v4 stages
+## Recorded v1 stages
 
-The published v2 checkpoint is the supported initialization for continued training. The release
-run used the converted target roots created above and retained all 2,000 synthetic and 357 real
-images.
+The release was initialized from an internal dense-votes checkpoint. Replace `$DENSE_BASE` with
+that checkpoint to reproduce the historical lineage. For a new fine-tuning run, the published v1
+checkpoint can be passed to `--weights` instead.
 
 ### S1: synthetic context
 
@@ -41,16 +41,16 @@ images.
 uv run volley-court-train \
   --data .work/synthetic-lines \
   --image-root datasets/court36-synthetic-combined-2000-camera-mode-v2 \
-  --weights path/to/court-line-yolo26n-semantic-v4.pt \
-  --output runs/s1-semantic-v4 \
+  --weights "$DENSE_BASE" \
+  --output runs/s1-synthetic \
   --target-mode dense_semantic \
-  --epochs 60 --batch 64 --workers 12 --imgsz 640 --device cuda:0 \
+  --epochs 20 --batch 64 --workers 12 --imgsz 640 --device cuda:0 \
   --amp-dtype bf16 \
-  --freeze-feature-epochs 12 --freeze-shared-epochs 4 \
-  --base-head-gradient-scale 0.1 \
-  --hard-negative-probability 0.20 \
-  --family-weight 0.5 --identity-weight 2.0 --identity-focal-weight 0.002 \
-  --roi-weight 0.5 --weight-decay 0.0001 --lr 0.0002 --seed 36
+  --freeze-feature-epochs 20 --freeze-shared-epochs 20 \
+  --base-head-gradient-scale 0 \
+  --hard-negative-probability 0.15 \
+  --family-weight 0.5 --identity-weight 0.75 --roi-weight 0.5 \
+  --weight-decay 0 --lr 0.0005 --seed 36
 ```
 
 ### S2: real adaptation
@@ -59,25 +59,20 @@ uv run volley-court-train \
 uv run volley-court-train \
   --data .work/real-lines \
   --image-root datasets/court36-unified \
-  --replay-data .work/synthetic-lines \
-  --replay-image-root datasets/court36-synthetic-combined-2000-camera-mode-v2 \
-  --replay-ratio 0.35 \
-  --weights runs/s1-semantic-v4/best.pt \
-  --output runs/s2-semantic-v4 \
-  --target-mode dense_semantic \
-  --epochs 40 --batch 32 --workers 12 --imgsz 640 --device cuda:0 \
+  --weights runs/s1-synthetic/best.pt \
+  --output runs/s2-real \
+  --epochs 15 --batch 32 --workers 12 --imgsz 640 --device cuda:0 \
   --amp-dtype bf16 \
-  --freeze-feature-epochs 8 --freeze-shared-epochs 3 \
-  --base-head-gradient-scale 0.05 \
-  --hard-negative-probability 0.25 \
-  --family-weight 0.5 --identity-weight 1.5 --identity-focal-weight 0.001 \
-  --roi-weight 0.5 --weight-decay 0.0001 --lr 0.00008 --seed 36
+  --freeze-feature-epochs 15 --freeze-shared-epochs 15 \
+  --base-head-gradient-scale 0 \
+  --hard-negative-probability 0.20 \
+  --family-weight 0.5 --identity-weight 0.75 --roi-weight 0.5 \
+  --weight-decay 0 --lr 0.0002 --seed 36
 ```
 
-The staged freeze protects the transferred dense geometry early, then permits controlled
-fine-tuning. S2 samples the synthetic replay set for 35% of each epoch. Two later coordinate-head
-pilots were rejected because they reduced validation identity accuracy; they are not part of the
-released architecture or checkpoint.
+The frozen shared backbone keeps the geometry learned by the dense-vote model while S1/S2 train
+the family, identity, and court-ROI context heads. This is a short adaptation recipe, not a claim
+that 15 epochs are universally optimal.
 
 ## Evaluation
 

@@ -16,7 +16,6 @@ class CourtLineLoss(nn.Module):
         length_weight: float = 2.0,
         family_weight: float = 0.5,
         identity_weight: float = 0.75,
-        identity_focal_weight: float = 0.0,
         roi_weight: float = 0.5,
         target_mode: str = "center",
     ) -> None:
@@ -33,16 +32,10 @@ class CourtLineLoss(nn.Module):
         if target_mode not in {"center", "dense_votes", "dense_context", "dense_semantic"}:
             raise ValueError(f"unsupported target mode: {target_mode}")
         self.target_mode = target_mode
-        if identity_focal_weight < 0.0:
-            raise ValueError("identity focal weight must be non-negative")
-        self.identity_focal_weight = identity_focal_weight
 
     @staticmethod
     def _center_focal(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        # BF16 cannot represent 1 - 1e-5. Promote before sigmoid/clamp so
-        # saturated semantic logits never produce log(0) during AMP training.
-        probability = logits.float().sigmoid().clamp(1e-5, 1.0 - 1e-5)
-        target = target.float()
+        probability = logits.sigmoid().clamp(1e-5, 1.0 - 1e-5)
         positive = target.eq(1.0)
         negative = target.lt(1.0)
         positive_loss = -(1.0 - probability).pow(2.0) * probability.log() * positive
@@ -98,29 +91,15 @@ class CourtLineLoss(nn.Module):
             )
             family = (family_loss * mask[:, 0]).sum() / denominator
             if self.target_mode == "dense_semantic":
-                identity_ce = F.cross_entropy(
+                identity_loss = F.cross_entropy(
                     prediction[:, 7:14],
                     target["identity"],
                     reduction="none",
                 )
-                identity_ce = (identity_ce * mask[:, 0]).sum() / denominator
-                identity_focal = torch.stack(
-                    [
-                        self._center_focal(
-                            prediction[:, identity_index + 7 : identity_index + 8],
-                            target["identity_heatmap"][:, identity_index : identity_index + 1],
-                        )
-                        for identity_index in range(7)
-                    ]
-                ).mean()
-                identity = identity_ce + self.identity_focal_weight * identity_focal
-                identity_accuracy = (
-                    (prediction[:, 7:14].argmax(dim=1) == target["identity"]).float() * mask[:, 0]
-                ).sum() / denominator
+                identity = (identity_loss * mask[:, 0]).sum() / denominator
                 roi_logits = prediction[:, 14:15]
             else:
                 identity = prediction.new_zeros(())
-                identity_accuracy = prediction.new_zeros(())
                 roi_logits = prediction[:, 7:8]
             roi_valid = target["roi_valid"].reshape(-1)
             roi_target = target["court_roi"]
@@ -137,7 +116,6 @@ class CourtLineLoss(nn.Module):
         else:
             family = prediction.new_zeros(())
             identity = prediction.new_zeros(())
-            identity_accuracy = prediction.new_zeros(())
             roi = prediction.new_zeros(())
         wc, wo, wr, wl, wf, wid, wi = self.weights
         total = (
@@ -157,6 +135,5 @@ class CourtLineLoss(nn.Module):
             "half_length": half_length.detach(),
             "family": family.detach(),
             "identity": identity.detach(),
-            "identity_accuracy": identity_accuracy.detach(),
             "roi": roi.detach(),
         }

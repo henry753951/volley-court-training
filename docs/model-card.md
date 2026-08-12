@@ -1,10 +1,10 @@
-# Model card: court-line-yolo26n-semantic-v4
+# Model card: court-line-yolo26n-v3
 
 ## Summary
 
-`court-line-yolo26n-semantic-v4` is a compact volleyball-court geometry model derived from a
-YOLO26n feature extractor. It predicts dense, zero-width line evidence instead of a semantic
-mask with an invented line thickness.
+`court-line-yolo26n-v3` is a compact volleyball-court geometry model derived from a YOLO26n
+feature extractor. It predicts dense, zero-width line evidence rather than a semantic mask with
+an invented line thickness.
 
 The network emits 15 channels at stride 4:
 
@@ -12,20 +12,22 @@ The network emits 15 channels at stride 4:
 - two offset channels that vote back to the zero-width centerline;
 - two orientation channels;
 - two family channels: `vertical` and `horizontal` in court topology;
-- seven semantic line identities;
+- seven semantic identity channels: left sideline, far baseline, right sideline, near baseline,
+  near attack, center, and far attack;
 - one court-ROI context channel.
 
-The CUDA decoder consolidates dense votes. A fixed semantic solver assigns the two sidelines and
-ordered transverse lines, applies an observability gate, and reconstructs the original Pose36
-contract only for accepted layouts.
+The CUDA/spatial decoder clusters the dense votes into short line segments. A separate geometric
+matcher can then reconstruct the original Pose36 keypoints and emits an explicit `ok`,
+`ambiguous`, or `abstained` state.
 
 ## Artifact
 
-- URL: <https://assets.hsulab.net/models/volley-court-lines/v2/court-line-yolo26n-semantic-v4.pt>
-- SHA-256: `b4aed936446e262518c927bf17dcf04877c7ba0f96e0db7687e84c3b2ea12b2b`
-- size: 6,703,451 bytes (6.39 MiB)
+- URL: <https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt>
+- SHA-256: `b0392c221978c87405f2646f41f14c1b66d4e7940d07c4a19c170b8321119e86`
+- size: 6,987,346 bytes (6.67 MiB)
 - parameters: 1,622,671
 - estimated compute at 640 px: 9.16 GFLOPs
+- checkpoint format: `yolo26n-court-line-v1`
 - target mode: `dense_semantic`
 - sample spacing: 16 px
 - intersection exclusion radius: 4 px
@@ -37,50 +39,54 @@ contract only for accepted layouts.
 - offline batched analysis and low-latency edge inference;
 - initialization for later court-geometry research.
 
-The model is not a calibrated arbitrary-image court classifier. The layout observability gate is
-the guardrail for incomplete or inconsistent evidence.
+The model is not intended to determine whether an arbitrary image contains a valid volleyball
+court with calibrated confidence. The layout matcher is the current guardrail for incomplete or
+inconsistent evidence.
 
 ## Evaluation
 
-The held-out real split contains 37 images.
+The held-out real split contains 37 images. The raw report is
+[`benchmarks/quality/court36-unified-test.json`](../benchmarks/quality/court36-unified-test.json).
 
-| Metric | Result |
+| Metric | Value |
 | --- | ---: |
-| matched line recall | 0.7887 |
-| family accuracy on matched lines | 0.9583 |
-| visible PCK@0.5% | 0.2419 |
-| visible PCK@1% | 0.2805 |
-| visible precision@1% | 0.7979 |
-| visible F1@1% | 0.4151 |
-| median visible error | 1.72 px |
-| layout accepted | 8 / 37 |
-| layout solver p99 | 2.33 ms |
+| matched line recall | 0.9061 |
+| family accuracy on matched lines | 0.8135 |
+| visible PCK@0.5% | 0.4576 |
+| visible PCK@1% | 0.4850 |
+| visible precision@1% | 0.8104 |
+| visible F1@1% | 0.6069 |
+| median visible error | 1.67 px |
+| layout `ok` / `ambiguous` / `abstained` | 18 / 18 / 1 |
 
 PCK thresholds are fractions of the labelled court bounding-box diagonal. Missing/abstained
-keypoints count against recall.
+keypoints count against recall. Precision answers a different question and is therefore higher.
 
 ## Training data and lineage
 
-The release was trained in two stages:
+The context-v3 release was trained in two stages:
 
-- synthetic S1: 1,600 train / 200 validation / 200 test Blender renders, 60 epochs;
-- real S2: 283 train / 37 validation / 37 test annotated images, 40 epochs, with 35% synthetic
-  replay.
+- synthetic S1: 1,600 train / 200 validation / 200 test Blender renders;
+- real S2: 283 train / 37 validation / 37 test annotated images.
 
+S1 was warm-started from an internal dense-votes checkpoint, and S2 from the best S1 checkpoint.
 The released history CSV files are stored next to the checkpoint on the asset share. Exact stage
 parameters are in [`docs/training.md`](training.md).
 
 ## Limitations
 
 - The real dataset is small and has limited negative-only imagery.
-- Advertising boards, floor seams, and unrelated straight lines can trigger local evidence.
-- A single visible right angle is geometrically underdetermined and should abstain.
-- Semantic identity can still be mirrored when camera-side evidence is insufficient.
-- Video tracking reduces jitter but does not create missing geometric evidence.
+- Advertising boards, floor seams, and unrelated straight lines can trigger local line evidence.
+- A single visible right angle is often geometrically underdetermined; the matcher should report
+  ambiguity instead of inventing a unique court.
+- Semantic line identity can be mirrored when camera-side evidence is insufficient.
+- Single-image layout recovery has no temporal context. Video mode provides an optional tracker
+  that smooths accepted layouts and advances all 36 points between matcher passes using optical
+  flow with RANSAC rejection and bounded state expiry.
 - The 37-image test split is too small for a narrow confidence interval.
 
-Keep the typed layout status in downstream systems; do not coerce `abstained` results into
-accepted keypoints.
+For deployment, keep the typed layout status and do not coerce `ambiguous` or `abstained` results
+into accepted keypoints.
 
 ## Distribution
 

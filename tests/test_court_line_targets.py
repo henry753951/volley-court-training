@@ -11,7 +11,6 @@ from volley_court.dataset import (
     segments_to_targets,
 )
 from volley_court.decode import (
-    assign_semantic_line_identities,
     decode_dense_semantic_cuda,
     decode_dense_votes,
     decode_dense_votes_cuda,
@@ -232,16 +231,13 @@ def test_dense_semantic_loss_and_decode_emit_line_identity() -> None:
         roi_valid=True,
     )
     prediction = torch.zeros((1, 15, 16, 16), requires_grad=True)
-    assert target["identity_heatmap"].shape == (7, 16, 16)
-    assert float(target["identity_heatmap"][4].sum()) > 0.0
-    loss, parts = CourtLineLoss(target_mode="dense_semantic", identity_focal_weight=1.0)(
+    loss, parts = CourtLineLoss(target_mode="dense_semantic")(
         prediction,
         {key: value.unsqueeze(0) for key, value in target.items()},
     )
     loss.backward()
     assert torch.isfinite(loss)
     assert float(parts["identity"]) > 0.0
-    assert float(parts["identity_accuracy"]) == 0.0
 
     raw = torch.full((1, 15, 16, 16), -10.0)
     for cell_x in (4, 8):
@@ -258,26 +254,6 @@ def test_dense_semantic_loss_and_decode_emit_line_identity() -> None:
     assert len(rows) == 1
     assert rows[0]["line_identity"] == 4
     assert rows[0]["identity_score"] > 0.99
-
-
-def test_dense_semantic_focal_is_finite_for_saturated_bfloat16_logits() -> None:
-    target = segments_to_targets(
-        [(8.0, 12.0, 56.0, 12.0)],
-        64,
-        target_mode="dense_semantic",
-        segment_families=[1],
-        segment_identities=[4],
-    )
-    prediction = torch.full((1, 15, 16, 16), 100.0, dtype=torch.bfloat16, requires_grad=True)
-    loss, _parts = CourtLineLoss(target_mode="dense_semantic", identity_focal_weight=1.0)(
-        prediction,
-        {key: value.unsqueeze(0) for key, value in target.items()},
-    )
-
-    assert torch.isfinite(loss)
-    loss.backward()
-    assert prediction.grad is not None
-    assert torch.isfinite(prediction.grad).all()
 
 
 def test_dense_decoder_promotes_half_precision_head_to_float() -> None:
@@ -349,46 +325,6 @@ def test_semantic_cuda_decoder_groups_by_identity_and_filters_geometry() -> None
     assert rows[0]["family"] == "horizontal"
     assert rows[0]["vote_count"] == 3
     assert abs(rows[0]["segment"][1] - rows[0]["segment"][3]) < 1e-5
-
-
-def test_semantic_cuda_decoder_reserves_proposals_per_identity() -> None:
-    dominant = _semantic_line_logits(cell_y=3, identity=0)
-    dominant[0, 3, (3, 7, 11)] = 10.0
-    weaker = _semantic_line_logits(cell_y=10, identity=4)
-    weaker[0, 10, (3, 11)] = 8.0
-    raw = torch.maximum(dominant, weaker)
-
-    rows = decode_dense_semantic_cuda(raw.unsqueeze(0), image_size=64, top_k=2)[0]
-
-    assert {row["line_identity"] for row in rows} == {0, 4}
-
-
-def test_ordered_semantic_assignment_recovers_complete_court_slots() -> None:
-    def row(segment: list[float], family: str, identity: int) -> dict[str, object]:
-        probabilities = [0.01] * 7
-        probabilities[identity] = 0.9
-        return {
-            "segment": segment,
-            "family": family,
-            "score": 0.8,
-            "identity_probabilities": probabilities,
-            "vote_count": 8,
-        }
-
-    proposals = [
-        row([80, 470, 250, 80], "vertical", 0),
-        row([560, 470, 390, 80], "vertical", 2),
-        row([250, 90, 390, 90], "horizontal", 1),
-        row([210, 160, 430, 160], "horizontal", 6),
-        row([180, 240, 460, 240], "horizontal", 5),
-        row([140, 330, 500, 330], "horizontal", 4),
-        row([80, 440, 560, 440], "horizontal", 3),
-    ]
-
-    assigned = assign_semantic_line_identities(proposals[::-1], 640, 480)
-
-    assert {candidate["line_identity"] for candidate in assigned} == set(range(7))
-    assert all(candidate["decoder"] == "semantic_ordered_cuda" for candidate in assigned)
 
 
 def test_semantic_cuda_decoder_batch_and_half_are_consistent() -> None:

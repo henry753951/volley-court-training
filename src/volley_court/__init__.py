@@ -6,7 +6,7 @@ from .tracking import CourtLayoutTracker, LayoutTrackingConfig
 from .types import CourtFrameResult, CourtKeypoint, CourtLayout, CourtLine
 from .visualization import CourtVisualizer, VisualizationConfig
 
-__version__ = "0.2.0"
+__version__ = "0.1.0"
 
 __all__ = [
     "DEFAULT_MODEL",

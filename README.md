@@ -8,11 +8,11 @@ and semantic identity, then optionally reconstructs the original 36 court keypoi
 [![uv](https://img.shields.io/badge/package-uv-DE5FE9)](https://docs.astral.sh/uv/)
 [![typed](https://img.shields.io/badge/typing-py.typed-2F80ED)](src/volley_court/py.typed)
 
-[![Court-line demo](https://assets.hsulab.net/demos/volley-court-lines/v2/demo-07s.jpg)](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2.mp4)
+[![Court-line demo](https://assets.hsulab.net/demos/volley-court-lines/v1/demo-07s.jpg)](https://assets.hsulab.net/demos/volley-court-lines/v1/clip-volley-court-lines-v1.mp4)
 
-**[Play the 14.8 s H.264 demo](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2.mp4)**
+**[Play the 14.8 s H.264 demo](https://assets.hsulab.net/demos/volley-court-lines/v1/clip-volley-court-lines-v1.mp4)**
 — generated locally from `test-videos/clip.mp4` through the public module, including layout
-matching on every source frame and the built-in visualizer.
+matching and the built-in visualizer.
 
 The visualizer keeps raw detections and recovered geometry deliberately separate. Unresolved
 frames show only small evidence ticks; an accepted layout shows the complete seven-line virtual
@@ -24,11 +24,11 @@ with optical flow, so the overlay does not lag between layout-matcher passes.
 The published wheel is the simplest internal installation path:
 
 ```bash
-uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.2.0/volley_court_lines-0.2.0-py3-none-any.whl"
+uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.0/volley_court_lines-0.1.0-py3-none-any.whl"
 ```
 
 ```bash
-pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.2.0/volley_court_lines-0.2.0-py3-none-any.whl"
+pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.0/volley_court_lines-0.1.0-py3-none-any.whl"
 ```
 
 For development:
@@ -79,20 +79,21 @@ uv run volley-court download
 uv run volley-court predict-image frame.jpg frame-court.jpg --device cuda:0
 
 uv run volley-court predict-video input.mp4 output.mp4 \
-  --device cuda:0 --batch-size 8 --layout-every 1
+  --device cuda:0 --batch-size 8 --layout-every 10
 ```
 
 Video output defaults to browser-safe H.264 High Profile, `yuv420p`, AAC audio, and MP4
-`faststart`. It requires `ffmpeg`.
+`faststart`. It requires `ffmpeg`. The legacy `--video-codec mp4v` path is available only as a
+fallback and is not recommended for web previews.
 
 ## Published assets
 
 | Asset | Contents | SHA-256 |
 | --- | --- | --- |
-| [v2 semantic checkpoint](https://assets.hsulab.net/models/volley-court-lines/v2/court-line-yolo26n-semantic-v4.pt) | 1.62 M parameters, 6.39 MiB | `b4aed9...12b2b` |
+| [v1 checkpoint](https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt) | 1.62 M parameters, 6.67 MiB | `b0392c...19e86` |
 | [Synthetic dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-synthetic-combined-2000-camera-mode-v2.tar.gz) | 2,000 Blender images | `5f8fa0...78569` |
 | [Real dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-unified.tar.gz) | 357 real images | `a40be9...12a4c` |
-| [Demo video](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2.mp4) | 1080p H.264/AAC, layout every frame | `96acd5...7e7f` |
+| [Demo video](https://assets.hsulab.net/demos/volley-court-lines/v1/clip-volley-court-lines-v1.mp4) | 1080p H.264/AAC | `b30846...5b4be` |
 
 Full checksums and dataset structure are in [docs/datasets.md](docs/datasets.md).
 
@@ -102,33 +103,36 @@ All model tests use 640 px FP16/BF16 inference and the CUDA spatial decoder.
 
 | GPU / path | Batch | Core FPS | Pipeline FPS | Latency |
 | --- | ---: | ---: | ---: | ---: |
-| RTX 5070, packaged benchmark | 1 | 59.44 | 48.07 | 20.17 ms p50/batch |
-| RTX 5070, packaged benchmark | 16 | 569.11 | 188.54 | 5.30 ms mean/frame |
-| H100 NVL, packaged benchmark | 1 | 135.98 | 81.53 | 10.36 ms p50/batch |
-| H100 NVL, packaged benchmark | 16 | 1,302.25 | 200.41 | 4.99 ms mean/frame |
-| RTX 5070, 1080p H.264 demo | 8 | 256.85 | 41.73 | layout every frame + CPU encode |
+| RTX 5070, packaged benchmark | 1 | 81.05 | 62.85 | 15.32 ms p50/batch |
+| RTX 5070, packaged benchmark | 16 | 830.56 | 240.90 | 4.15 ms mean/frame |
+| H100 NVL, 2,000-frame video benchmark | 16 | 763.01 | 254.77 | 3.92 ms throughput/frame |
+| H100 NVL, overlay + MP4 | 16 | 738.58 | 112.30 | 8.90 ms throughput/frame |
+| RTX 5070, tracked 1080p H.264 demo | 8 | 301.24 | 25.34 | optical flow + layout + CPU encode |
 
-The H100 and RTX 5070 packaged rows use the same 512 source frames and benchmark harness. See
+The H100 and RTX 5070 rows use different source videos and benchmark harness revisions; they are
+operational measurements, not a claim that one GPU is universally faster. See
 [docs/benchmarks.md](docs/benchmarks.md) for methodology, raw JSON, memory use, and hardware
 specifications.
 
 ## Quality snapshot
 
-Controlled H100 evaluation on the same 37-image real test split:
+On the 37-image real test split:
 
-| Path | PCK@1% | Precision@1% | Line recall | Family accuracy | Layout p99 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| v2 semantic model + fixed solver | 28.05% | 79.79% | 78.87% | 95.83% | 2.33 ms |
+- line-family accuracy: **81.35%** over matched lines;
+- line match recall: **90.61%**;
+- visible-keypoint PCK@1%: **48.50%**;
+- visible-keypoint precision@1%: **81.04%**;
+- layout status: 18 `ok`, 18 `ambiguous`, 1 `abstained`.
 
-The fixed solver accepts 8/37 frames. Missing/abstained points count against PCK. The full
-machine-readable report is in `benchmarks/semantic-layout-v2-real-test.json`.
+The 90% figure is line recall, not end-to-end keypoint accuracy. The layout matcher intentionally
+abstains or marks ambiguity when the visible evidence cannot determine a unique court.
 
 ## Training design
 
-The released v2 model follows two semantic stages after dense-vote initialization:
+The released model follows two context stages after dense-vote initialization:
 
-1. **S1 synthetic:** 2,000 Blender images, 60 epochs, batch 64, BF16.
-2. **S2 real:** 357 real images, 40 epochs, batch 32, BF16, with 35% synthetic replay.
+1. **S1 synthetic:** 2,000 Blender images, 20 epochs, batch 64, BF16, frozen shared features.
+2. **S2 real:** 357 real images, 15 epochs, batch 32, BF16, synthetic best as initialization.
 
 This ordering teaches court geometry and camera coverage first, then adapts appearance to real
 broadcasts without discarding the learned topology. Exact commands and the limitations of the

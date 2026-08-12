@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import ConcatDataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader
 
 from .dataset import CourtLineDataset
 from .inference import resolve_device
@@ -33,9 +33,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--image-root", type=Path, default=None, help="Override original image root"
     )
-    parser.add_argument("--replay-data", type=Path, default=None)
-    parser.add_argument("--replay-image-root", type=Path, default=None)
-    parser.add_argument("--replay-ratio", type=float, default=0.0)
     parser.add_argument(
         "--pose-checkpoint", type=Path, help="Pose36 checkpoint used for transfer/rebuild"
     )
@@ -63,7 +60,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hard-negative-probability", type=float, default=0.15)
     parser.add_argument("--family-weight", type=float, default=0.5)
     parser.add_argument("--identity-weight", type=float, default=0.75)
-    parser.add_argument("--identity-focal-weight", type=float, default=0.0)
     parser.add_argument("--roi-weight", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=36)
     parser.add_argument("--limit-train", type=int, default=0, help="Debug-only sample limit")
@@ -113,7 +109,6 @@ def _run_epoch(
             "half_length",
             "family",
             "identity",
-            "identity_accuracy",
             "roi",
         )
     }
@@ -210,10 +205,6 @@ def main() -> int:
         raise ValueError("pass --pose-checkpoint for initial transfer or --weights for fine-tuning")
     if args.epochs < 1:
         raise ValueError("--epochs must be positive")
-    if not 0.0 <= args.replay_ratio < 1.0:
-        raise ValueError("--replay-ratio must be in [0, 1)")
-    if (args.replay_data is None) != (args.replay_ratio == 0.0):
-        raise ValueError("pass both --replay-data and a positive --replay-ratio")
     output = args.output.resolve()
     if output.exists() and any(output.iterdir()):
         raise FileExistsError(f"refusing to overwrite non-empty output: {output}")
@@ -304,47 +295,10 @@ def main() -> int:
         intersection_exclusion=args.intersection_exclusion,
         hard_negative_probability=0.0,
     )
-    replay_set = None
-    sampler = None
-    training_source: CourtLineDataset | ConcatDataset = train_set
-    if args.replay_data is not None:
-        replay_set = CourtLineDataset(
-            args.replay_data,
-            "train",
-            args.imgsz,
-            args.replay_image_root,
-            augment=True,
-            seed=args.seed + 1,
-            target_mode=args.target_mode,
-            sample_spacing=args.sample_spacing,
-            intersection_exclusion=args.intersection_exclusion,
-            hard_negative_probability=(
-                args.hard_negative_probability
-                if args.target_mode in {"dense_context", "dense_semantic"}
-                else 0.0
-            ),
-        )
-        training_source = ConcatDataset((train_set, replay_set))
-        primary_weight = (1.0 - args.replay_ratio) / len(train_set)
-        replay_weight = args.replay_ratio / len(replay_set)
-        sample_weights = torch.cat(
-            (
-                torch.full((len(train_set),), primary_weight, dtype=torch.double),
-                torch.full((len(replay_set),), replay_weight, dtype=torch.double),
-            )
-        )
-        samples_per_epoch = math.ceil(len(train_set) / (1.0 - args.replay_ratio))
-        sampler = WeightedRandomSampler(
-            sample_weights,
-            num_samples=samples_per_epoch,
-            replacement=True,
-            generator=torch.Generator().manual_seed(args.seed),
-        )
     train_loader = DataLoader(
-        training_source,
+        train_set,
         batch_size=args.batch,
-        shuffle=sampler is None,
-        sampler=sampler,
+        shuffle=True,
         num_workers=args.workers,
         pin_memory=device.type == "cuda",
         # Workers restart each epoch so the deterministic epoch-specific augmentation seed propagates.
@@ -365,7 +319,6 @@ def main() -> int:
         ),
         family_weight=args.family_weight,
         identity_weight=args.identity_weight,
-        identity_focal_weight=args.identity_focal_weight,
         roi_weight=args.roi_weight,
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -398,7 +351,6 @@ def main() -> int:
                 "half_length",
                 "family",
                 "identity",
-                "identity_accuracy",
                 "roi",
                 "target_collisions",
                 "target_votes",
@@ -415,7 +367,6 @@ def main() -> int:
                 "half_length",
                 "family",
                 "identity",
-                "identity_accuracy",
                 "roi",
                 "target_collisions",
                 "target_votes",
@@ -429,8 +380,6 @@ def main() -> int:
         for epoch in range(args.epochs):
             started = time.perf_counter()
             train_set.set_epoch(epoch)
-            if replay_set is not None:
-                replay_set.set_epoch(epoch)
             feature_frozen = epoch < args.freeze_feature_epochs
             shared_frozen = epoch < args.freeze_shared_epochs
             model.freeze_shared_features(shared_frozen)

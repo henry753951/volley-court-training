@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import itertools
 import math
 from collections.abc import Sequence
 from typing import Any
@@ -365,35 +364,21 @@ def decode_dense_semantic_cuda(
     canvas_height = image_size or grid_height * stride
     heatmap = prediction[:, 0:1].sigmoid()
     peaks = heatmap * heatmap.eq(F.max_pool2d(heatmap, 3, stride=1, padding=1))
-    # These seven channels are trained both as a mutually exclusive identity
-    # classifier and as independent sparse semantic heatmaps.  Sigmoid preserves
-    # the latter's absolute confidence; softmax would manufacture a high class
-    # probability even on pixels where no physical line is present.
-    identity_map = prediction[:, 7:14].sigmoid()
-    # Select a fixed proposal budget independently for every physical line.
-    # A global top-k lets the strongest/longest line monopolize all proposals,
-    # which makes otherwise observable layouts abstain.  Ranking by the joint
-    # center/identity probability retains weak semantic lines without adding a
-    # combinatorial topology search.
-    proposal_score = peaks * identity_map
     k = min(top_k, grid_height * grid_width)
-    _ranked_scores, indices = torch.topk(proposal_score.flatten(2), k=k, dim=2)
+    scores, indices = torch.topk(peaks.flatten(1), k=k, dim=1)
+    gather_indices = indices.unsqueeze(1)
 
     def gather(tensor: torch.Tensor) -> torch.Tensor:
-        channels = tensor.shape[1]
-        flattened = tensor.flatten(2).unsqueeze(2).expand(-1, -1, 7, -1)
-        gathered = torch.gather(
-            flattened,
-            3,
-            indices.unsqueeze(1).expand(-1, channels, -1, -1),
-        )
-        return gathered.permute(0, 2, 3, 1)
+        return torch.gather(
+            tensor.flatten(2),
+            2,
+            gather_indices.expand(-1, tensor.shape[1], -1),
+        ).transpose(1, 2)
 
-    scores = gather(peaks).squeeze(-1)
     offset = gather(prediction[:, 1:3].sigmoid())
     orientation = gather(F.normalize(prediction[:, 3:5], dim=1, eps=1e-6))
     family_probability = gather(prediction[:, 5:7].softmax(dim=1))
-    identity_probability = gather(identity_map)
+    identity_probability = gather(prediction[:, 7:14].softmax(dim=1))
     roi_probability = gather(prediction[:, 14:15].sigmoid()).squeeze(-1)
     cell_x = (indices % grid_width).to(dtype=prediction.dtype)
     cell_y = torch.div(indices, grid_width, rounding_mode="floor").to(dtype=prediction.dtype)
@@ -408,18 +393,14 @@ def decode_dense_semantic_cuda(
     # Soft semantic assignment is important here.  The small real-data set makes
     # the correct ID frequently rank second, so argmax would discard useful court
     # evidence.  Identity probability participates in both assignment and weight.
-    line_indices = torch.arange(7, device=prediction.device).view(1, 7, 1, 1)
-    line_identity_probability = torch.gather(
-        identity_probability, 3, line_indices.expand(batch, -1, k, -1)
-    ).squeeze(-1)
-    assigned = valid & (line_identity_probability >= minimum_identity)
-    base_weights = scores * roi_probability * line_identity_probability
+    assigned = valid.unsqueeze(-1) & (identity_probability >= minimum_identity)
+    base_weights = scores.unsqueeze(-1) * roi_probability.unsqueeze(-1) * identity_probability
 
     def reduce_groups(group_mask: torch.Tensor):
         weights = base_weights * group_mask
-        weight_sum = weights.sum(dim=2).clamp_min(1e-9)
-        centers = torch.einsum("blk,blki->bli", weights, points) / weight_sum.unsqueeze(-1)
-        axial = torch.einsum("blk,blki->bli", weights, orientation)
+        weight_sum = weights.sum(dim=1).clamp_min(1e-9)
+        centers = torch.einsum("bkl,bki->bli", weights, points) / weight_sum.unsqueeze(-1)
+        axial = torch.einsum("bkl,bki->bli", weights, orientation)
         axial = F.normalize(axial, dim=-1, eps=1e-6)
         theta = 0.5 * torch.atan2(axial[..., 1], axial[..., 0])
         direction = torch.stack((torch.cos(theta), torch.sin(theta)), dim=-1)
@@ -428,37 +409,37 @@ def decode_dense_semantic_cuda(
     # First pass obtains a stable semantic line.  The second pass removes votes
     # that have the right class but cannot lie on that line geometrically.
     _weights, _weight_sum, centers, axial, direction = reduce_groups(assigned)
-    centered = points - centers.unsqueeze(2)
+    centered = points.unsqueeze(2) - centers.unsqueeze(1)
     perpendicular = torch.abs(
-        centered[..., 0] * -direction[:, :, None, 1] + centered[..., 1] * direction[:, :, None, 0]
+        centered[..., 0] * -direction[:, None, :, 1] + centered[..., 1] * direction[:, None, :, 0]
     )
-    axial_similarity = torch.einsum("blki,bli->blk", orientation, axial)
+    axial_similarity = torch.einsum("bki,bli->bkl", orientation, axial)
     refined = (
         assigned
         & (perpendicular <= perpendicular_distance_px)
         & (axial_similarity >= math.cos(math.radians(2.0 * angle_degrees)))
     )
     weights, weight_sum, centers, axial, direction = reduce_groups(refined)
-    vote_count = refined.sum(dim=2)
-    centered = points - centers.unsqueeze(2)
-    projection = torch.einsum("blki,bli->blk", centered, direction)
+    vote_count = refined.sum(dim=1)
+    centered = points.unsqueeze(2) - centers.unsqueeze(1)
+    projection = torch.einsum("bkli,bli->bkl", centered, direction)
     positive_infinity = torch.full_like(projection, torch.inf)
     negative_infinity = torch.full_like(projection, -torch.inf)
-    low = torch.where(refined, projection, positive_infinity).amin(dim=2)
-    high = torch.where(refined, projection, negative_infinity).amax(dim=2)
+    low = torch.where(refined, projection, positive_infinity).amin(dim=1)
+    high = torch.where(refined, projection, negative_infinity).amax(dim=1)
     low = low - 0.5 * sample_spacing
     high = high + 0.5 * sample_spacing
     first = centers + low.unsqueeze(-1) * direction
     second = centers + high.unsqueeze(-1) * direction
     count_float = vote_count.to(dtype=prediction.dtype).clamp_min(1.0)
-    mean_score = (scores * refined).sum(dim=2) / count_float
-    mean_family = torch.einsum("blk,blki->bli", weights, family_probability) / weight_sum.unsqueeze(
+    mean_score = (scores.unsqueeze(-1) * refined).sum(dim=1) / count_float
+    mean_family = torch.einsum("bkl,bki->bli", weights, family_probability) / weight_sum.unsqueeze(
         -1
     )
     mean_identity = torch.einsum(
-        "blk,blki->bli", weights, identity_probability
+        "bkl,bki->bli", weights, identity_probability
     ) / weight_sum.unsqueeze(-1)
-    mean_roi = (weights * roi_probability).sum(dim=2) / weight_sum
+    mean_roi = (weights * roi_probability.unsqueeze(-1)).sum(dim=1) / weight_sum
 
     compact = (
         torch.cat(
@@ -520,206 +501,6 @@ def decode_dense_semantic_cuda(
             )
         decoded.append(rows)
     return decoded
-
-
-def _line_coordinate(row: dict[str, Any], reference: float, *, horizontal: bool) -> float:
-    x1, y1, x2, y2 = (float(value) for value in row["segment"])
-    if horizontal:
-        if abs(x2 - x1) < 1e-6:
-            return 0.5 * (y1 + y2)
-        return y1 + (reference - x1) * (y2 - y1) / (x2 - x1)
-    if abs(y2 - y1) < 1e-6:
-        return 0.5 * (x1 + x2)
-    return x1 + (reference - y1) * (x2 - x1) / (y2 - y1)
-
-
-def _merge_semantic_candidates(
-    rows: list[dict[str, Any]], width: int, height: int
-) -> list[dict[str, Any]]:
-    """Merge only near-collinear fragments before fixed semantic assignment."""
-
-    if not rows:
-        return []
-    diagonal = math.hypot(width, height)
-    reference_x = 0.5 * width
-    ordered = sorted(rows, key=lambda row: _line_coordinate(row, reference_x, horizontal=True))
-    clusters: list[list[dict[str, Any]]] = []
-    for row in ordered:
-        coordinate = _line_coordinate(row, reference_x, horizontal=True)
-        angle = math.atan2(
-            float(row["segment"][3]) - float(row["segment"][1]),
-            float(row["segment"][2]) - float(row["segment"][0]),
-        )
-        if clusters:
-            previous = clusters[-1][-1]
-            previous_coordinate = _line_coordinate(previous, reference_x, horizontal=True)
-            previous_angle = math.atan2(
-                float(previous["segment"][3]) - float(previous["segment"][1]),
-                float(previous["segment"][2]) - float(previous["segment"][0]),
-            )
-            angle_delta = abs(
-                math.atan2(math.sin(angle - previous_angle), math.cos(angle - previous_angle))
-            )
-            angle_delta = min(angle_delta, abs(math.pi - angle_delta))
-            if abs(coordinate - previous_coordinate) <= max(
-                4.0, 0.008 * diagonal
-            ) and angle_delta <= math.radians(8.0):
-                clusters[-1].append(row)
-                continue
-        clusters.append([row])
-
-    merged: list[dict[str, Any]] = []
-    for cluster in clusters:
-        if len(cluster) == 1:
-            merged.append(dict(cluster[0]))
-            continue
-        weights = np.asarray([max(float(row.get("score", 0.0)), 1e-3) for row in cluster])
-        points = np.asarray(
-            [[float(value) for value in row["segment"][:2]] for row in cluster]
-            + [[float(value) for value in row["segment"][2:]] for row in cluster],
-            dtype=np.float64,
-        )
-        point_weights = np.concatenate((weights, weights))
-        center = np.average(points, axis=0, weights=point_weights)
-        centered = points - center
-        covariance = (centered * point_weights[:, None]).T @ centered / point_weights.sum()
-        _eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-        direction = eigenvectors[:, -1]
-        projection = centered @ direction
-        first = center + projection.min() * direction
-        second = center + projection.max() * direction
-        clipped = clip_segment_to_image((*first, *second), width, height)
-        if clipped is None:
-            continue
-        probabilities = np.average(
-            np.asarray([row.get("identity_probabilities", [0.0] * 7) for row in cluster]),
-            axis=0,
-            weights=weights,
-        )
-        source = dict(max(cluster, key=lambda row: float(row.get("score", 0.0))))
-        source.update(
-            segment=list(clipped),
-            center=[0.5 * (clipped[0] + clipped[2]), 0.5 * (clipped[1] + clipped[3])],
-            score=float(np.average([row.get("score", 0.0) for row in cluster], weights=weights)),
-            identity_probabilities=probabilities.tolist(),
-            vote_count=sum(int(row.get("vote_count", 1)) for row in cluster),
-        )
-        merged.append(source)
-    return merged
-
-
-def _ordered_semantic_assignment(
-    rows: list[dict[str, Any]], identities: tuple[int, ...]
-) -> list[tuple[int, int]]:
-    """Align ordered proposals to ordered physical lines in O(NK)."""
-
-    row_count, identity_count = len(rows), len(identities)
-    negative = -1e9
-    scores = np.full((row_count + 1, identity_count + 1), negative, dtype=np.float64)
-    paths: list[list[list[tuple[int, int]]]] = [
-        [[] for _identity in range(identity_count + 1)] for _row in range(row_count + 1)
-    ]
-    scores[0, 0] = 0.0
-    for row_index in range(row_count + 1):
-        for identity_index in range(identity_count + 1):
-            current = scores[row_index, identity_index]
-            if current <= negative:
-                continue
-            if row_index < row_count and current - 0.30 > scores[row_index + 1, identity_index]:
-                scores[row_index + 1, identity_index] = current - 0.30
-                paths[row_index + 1][identity_index] = paths[row_index][identity_index]
-            if (
-                identity_index < identity_count
-                and current - 0.25 > scores[row_index, identity_index + 1]
-            ):
-                scores[row_index, identity_index + 1] = current - 0.25
-                paths[row_index][identity_index + 1] = paths[row_index][identity_index]
-            if row_index < row_count and identity_index < identity_count:
-                probabilities = rows[row_index].get("identity_probabilities", [])
-                identity = identities[identity_index]
-                probability = float(probabilities[identity]) if len(probabilities) == 7 else 0.0
-                match = current + 2.0 * probability + float(rows[row_index].get("score", 0.0))
-                if match > scores[row_index + 1, identity_index + 1]:
-                    scores[row_index + 1, identity_index + 1] = match
-                    paths[row_index + 1][identity_index + 1] = [
-                        *paths[row_index][identity_index],
-                        (row_index, identity),
-                    ]
-    return paths[row_count][identity_count]
-
-
-def assign_semantic_line_identities(
-    rows: list[dict[str, Any]], width: int, height: int
-) -> list[dict[str, Any]]:
-    """Convert unordered CUDA line proposals into seven fixed semantic slots."""
-
-    vertical = [row for row in rows if row.get("family") == "vertical"]
-    horizontal = _merge_semantic_candidates(
-        [row for row in rows if row.get("family") == "horizontal"], width, height
-    )
-    output: list[dict[str, Any]] = []
-    if len(vertical) >= 2:
-        # Compare candidates where their evidence actually exists.  Evaluating
-        # short false-positive segments near the image border far outside their
-        # support can make them appear more widely separated than the sidelines.
-        reference_y = float(
-            np.median(
-                [0.5 * (float(row["segment"][1]) + float(row["segment"][3])) for row in vertical]
-            )
-        )
-        best_pair = max(
-            itertools.combinations(vertical, 2),
-            key=lambda pair: (
-                abs(
-                    _line_coordinate(pair[0], reference_y, horizontal=False)
-                    - _line_coordinate(pair[1], reference_y, horizontal=False)
-                )
-                / max(width, 1)
-                + 2.0
-                * sum(
-                    float(row.get("score", 0.0))
-                    * math.sqrt(
-                        math.hypot(
-                            float(row["segment"][2]) - float(row["segment"][0]),
-                            float(row["segment"][3]) - float(row["segment"][1]),
-                        )
-                        / max(math.hypot(width, height), 1.0)
-                    )
-                    for row in pair
-                )
-            ),
-        )
-        for identity, row in zip(
-            (0, 2),
-            sorted(
-                best_pair,
-                key=lambda candidate: _line_coordinate(candidate, reference_y, horizontal=False),
-            ),
-            strict=True,
-        ):
-            updated = dict(row)
-            updated["line_identity"] = identity
-            probabilities = row.get("identity_probabilities", [])
-            updated["identity_score"] = (
-                float(probabilities[identity]) if len(probabilities) == 7 else 0.0
-            )
-            updated["decoder"] = "semantic_ordered_cuda"
-            output.append(updated)
-
-    ordered_horizontal = sorted(
-        horizontal,
-        key=lambda row: _line_coordinate(row, 0.5 * width, horizontal=True),
-    )
-    for row_index, identity in _ordered_semantic_assignment(ordered_horizontal, (1, 6, 5, 4, 3)):
-        updated = dict(ordered_horizontal[row_index])
-        updated["line_identity"] = identity
-        probabilities = updated.get("identity_probabilities", [])
-        updated["identity_score"] = (
-            float(probabilities[identity]) if len(probabilities) == 7 else 0.0
-        )
-        updated["decoder"] = "semantic_ordered_cuda"
-        output.append(updated)
-    return output
 
 
 def decode_dense_votes_cuda(
