@@ -151,12 +151,6 @@ class CourtLayout:
     hypothesis_margin: float
     semantic_alignment: float | None
     homography: tuple[tuple[float, float, float], ...] | None
-    direct_validity: float | None = None
-    direct_proposal_probability: float | None = None
-    proposal_disagreement: float | None = None
-    anchor_count: int = 0
-    anchor_inlier_count: int = 0
-    anchor_fit_error: float | None = None
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, Any]) -> CourtLayout:
@@ -192,24 +186,6 @@ class CourtLayout:
                 else None
             ),
             homography=homography,
-            direct_validity=(
-                float(row["direct_validity"]) if row.get("direct_validity") is not None else None
-            ),
-            direct_proposal_probability=(
-                float(row["direct_proposal_probability"])
-                if row.get("direct_proposal_probability") is not None
-                else None
-            ),
-            proposal_disagreement=(
-                float(row["proposal_disagreement"])
-                if row.get("proposal_disagreement") is not None
-                else None
-            ),
-            anchor_count=int(row.get("anchor_count", 0)),
-            anchor_inlier_count=int(row.get("anchor_inlier_count", 0)),
-            anchor_fit_error=(
-                float(row["anchor_fit_error"]) if row.get("anchor_fit_error") is not None else None
-            ),
         )
 
     def to_mapping(self) -> dict[str, Any]:
@@ -223,12 +199,6 @@ class CourtLayout:
             "homography": [list(row) for row in self.homography] if self.homography else None,
             "keypoints": [point.to_mapping() for point in self.keypoints],
             "candidate_keypoints": [point.to_mapping() for point in self.candidate_keypoints],
-            "direct_validity": self.direct_validity,
-            "direct_proposal_probability": self.direct_proposal_probability,
-            "proposal_disagreement": self.proposal_disagreement,
-            "anchor_count": self.anchor_count,
-            "anchor_inlier_count": self.anchor_inlier_count,
-            "anchor_fit_error": self.anchor_fit_error,
         }
 
 

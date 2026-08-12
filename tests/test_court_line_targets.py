@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import math
 
-import cv2
 import numpy as np
 import torch
 
 from volley_court.dataset import (
     ImageTransform,
-    canonicalize_pose36_points,
-    points_to_layout_target,
     sample_segment_points,
     segments_to_targets,
 )
@@ -20,11 +17,8 @@ from volley_court.decode import (
     decode_predictions,
     merge_duplicates,
 )
-from volley_court.geometry import PointSample
-from volley_court.inference import _anchor_solver_passes, resolve_decoder
-from volley_court.layout import CANONICAL_KEYPOINTS
+from volley_court.inference import resolve_decoder
 from volley_court.loss import CourtLineLoss
-from volley_court.model import DirectLayoutHead
 
 
 def test_target_is_endpoint_swap_invariant() -> None:
@@ -53,150 +47,6 @@ def test_image_transform_round_trip() -> None:
     restored = transform.restore_segment(transformed, 200, 150)
     assert restored is not None
     assert np.allclose(restored, original, atol=1e-6)
-
-
-def test_image_transform_detects_horizontal_mirror() -> None:
-    identity = ImageTransform(np.eye(3), np.eye(3), 128)
-    mirror_matrix = np.asarray([[-1.0, 0.0, 127.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
-    mirrored = ImageTransform(mirror_matrix, np.linalg.inv(mirror_matrix), 128)
-    assert not identity.mirrored
-    assert mirrored.mirrored
-
-
-def test_layout_target_recovers_ordered_outer_corners() -> None:
-    expected = np.asarray(
-        [[0.08, 0.88], [0.18, 0.22], [0.82, 0.22], [0.92, 0.88]],
-        dtype=np.float32,
-    )
-    canonical_corners = np.asarray([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=np.float32)
-    homography = cv2.getPerspectiveTransform(canonical_corners, expected)
-    points = []
-    for index, (x, y) in enumerate(CANONICAL_KEYPOINTS):
-        value = homography @ np.asarray([x / 9.0, y / 18.0, 1.0])
-        value = value[:2] / value[2]
-        points.append(PointSample(index, float(value[0]), float(value[1]), 2))
-    transform = ImageTransform(np.eye(3), np.eye(3), 640)
-    target = points_to_layout_target(points, transform, 640, 640)
-    assert float(target["layout_valid"]) == 1.0
-    assert np.allclose(target["layout_corners"].numpy(), expected, atol=1e-5)
-
-
-def test_layout_target_keeps_fixed_identity_after_horizontal_augmentation() -> None:
-    expected = np.asarray(
-        [[0.08, 0.88], [0.18, 0.22], [0.82, 0.22], [0.92, 0.88]],
-        dtype=np.float32,
-    )
-    canonical_corners = np.asarray([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=np.float32)
-    homography = cv2.getPerspectiveTransform(canonical_corners, expected)
-    points = []
-    for index, (x, y) in enumerate(CANONICAL_KEYPOINTS):
-        value = homography @ np.asarray([x / 9.0, y / 18.0, 1.0])
-        value = value[:2] / value[2]
-        points.append(PointSample(index, float(value[0]), float(value[1]), 2))
-    mirror_matrix = np.asarray([[-1.0, 0.0, 639.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
-    transform = ImageTransform(mirror_matrix, np.linalg.inv(mirror_matrix), 640)
-    target = points_to_layout_target(points, transform, 640, 640)
-    assert float(target["layout_valid"]) == 1.0
-    expected_mirrored = expected.copy()
-    expected_mirrored[:, 0] = 1.0 - expected_mirrored[:, 0]
-    expected_mirrored = expected_mirrored[[3, 2, 1, 0]]
-    assert np.allclose(target["layout_corners"].numpy(), expected_mirrored, atol=2e-3)
-
-
-def test_layout_target_abstains_on_one_line() -> None:
-    points = [PointSample(index, 0.2, 0.1 + 0.03 * index, 2) for index in range(5)]
-    target = points_to_layout_target(points, ImageTransform(np.eye(3), np.eye(3), 640), 640, 640)
-    assert float(target["layout_valid"]) == 0.0
-
-
-def test_layout_target_canonicalizes_length_flipped_court_identity() -> None:
-    destination = np.asarray(
-        [[0.18, 0.22], [0.08, 0.88], [0.92, 0.88], [0.82, 0.22]],
-        dtype=np.float32,
-    )
-    canonical_corners = np.asarray([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=np.float32)
-    homography = cv2.getPerspectiveTransform(canonical_corners, destination)
-    points = []
-    for index, (x, y) in enumerate(CANONICAL_KEYPOINTS):
-        value = homography @ np.asarray([x / 9.0, y / 18.0, 1.0])
-        value = value[:2] / value[2]
-        points.append(PointSample(index, float(value[0]), float(value[1]), 2))
-    target = points_to_layout_target(
-        points,
-        ImageTransform(np.eye(3), np.eye(3), 640),
-        640,
-        640,
-    )
-    assert float(target["layout_valid"]) == 1.0
-    expected = destination[[1, 0, 3, 2]]
-    assert np.allclose(target["layout_corners"].numpy(), expected, atol=1e-5)
-
-
-def test_layout_target_canonicalizes_all_legal_court_symmetries() -> None:
-    expected = np.asarray(
-        [[0.08, 0.88], [0.18, 0.22], [0.82, 0.22], [0.92, 0.88]],
-        dtype=np.float32,
-    )
-    canonical_corners = np.asarray([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=np.float32)
-    for permutation in ((0, 1, 2, 3), (3, 2, 1, 0), (1, 0, 3, 2), (2, 3, 0, 1)):
-        homography = cv2.getPerspectiveTransform(canonical_corners, expected[list(permutation)])
-        points = []
-        for index, (x, y) in enumerate(CANONICAL_KEYPOINTS):
-            value = homography @ np.asarray([x / 9.0, y / 18.0, 1.0])
-            value = value[:2] / value[2]
-            points.append(PointSample(index, float(value[0]), float(value[1]), 2))
-        target = points_to_layout_target(
-            points,
-            ImageTransform(np.eye(3), np.eye(3), 640),
-            640,
-            640,
-        )
-        assert float(target["layout_valid"]) == 1.0
-        assert np.allclose(target["layout_corners"].numpy(), expected, atol=1e-5)
-
-
-def test_pose36_point_ids_follow_selected_layout_symmetry() -> None:
-    points = [PointSample(index, 0.1 + index * 0.01, 0.2, 2) for index in range(36)]
-    length_flipped = canonicalize_pose36_points(points, 2)
-    by_id = {point.index: point for point in length_flipped}
-    assert by_id[0].x == points[4].x
-    assert by_id[4].x == points[0].x
-    assert by_id[9].x == points[5].x
-
-
-def test_direct_layout_head_and_loss_backpropagate() -> None:
-    head = DirectLayoutHead(32, proposals=1)
-    layout_prediction = head(torch.randn(2, 32, 160, 160))
-    assert layout_prediction.heatmap_logits.shape == (2, 36, 40, 40)
-    assert layout_prediction.offset_logits.shape == (2, 72, 40, 40)
-    assert layout_prediction.point_visibility_logits.shape == (2, 36)
-    assert layout_prediction.validity_logits.shape == (2,)
-    assert layout_prediction.orientation_logits.shape == (2, 8)
-    target = segments_to_targets(
-        [(8.0, 16.0, 56.0, 16.0)],
-        64,
-        target_mode="dense_votes",
-    )
-    batch_target = {
-        key: value.unsqueeze(0).repeat(2, *([1] * value.ndim)) for key, value in target.items()
-    }
-    batch_target["layout_valid"] = torch.tensor([1.0, 0.0])
-    batch_target["layout_points"] = torch.zeros((2, 36, 2))
-    batch_target["layout_points"][0, :4] = torch.tensor(
-        [[0.1, 0.9], [0.2, 0.2], [0.8, 0.2], [0.9, 0.9]]
-    )
-    batch_target["layout_point_valid"] = torch.zeros((2, 36))
-    batch_target["layout_point_valid"][0, :4] = 1.0
-    prediction = torch.zeros((2, 5, 16, 16), requires_grad=True)
-    loss, parts = CourtLineLoss(target_mode="dense_votes", length_weight=0.0)(
-        prediction,
-        batch_target,
-        layout_prediction,
-    )
-    loss.backward()
-    assert torch.isfinite(loss)
-    assert float(parts["layout_validity"]) > 0.0
-    assert any(parameter.grad is not None for parameter in head.parameters())
 
 
 def test_decode_restores_center_and_unordered_orientation() -> None:
@@ -534,11 +384,3 @@ def test_auto_decoder_uses_cuda_only_when_batch_amortizes_it() -> None:
         resolve_decoder("auto", device_type="cpu", target_mode="dense_semantic", batch_size=16)
         == "spatial"
     )
-
-
-def test_hybrid_anchor_solver_has_one_bounded_fallback() -> None:
-    assert _anchor_solver_passes("hybrid", 128) == (
-        (cv2.RANSAC, 128),
-        (cv2.USAC_DEFAULT, 512),
-    )
-    assert _anchor_solver_passes("ransac", 64) == ((cv2.RANSAC, 64),)

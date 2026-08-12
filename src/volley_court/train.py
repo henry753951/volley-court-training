@@ -11,7 +11,6 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 
 from .dataset import CourtLineDataset
@@ -19,8 +18,6 @@ from .inference import resolve_device
 from .loss import CourtLineLoss
 from .model import (
     DEFAULT_POSE_ARCHITECTURE,
-    DIRECT_LAYOUT_HEAD_VERSION,
-    YOLO26CourtLine,
     build_from_pose_checkpoint,
     load_court_line_checkpoint,
 )
@@ -52,8 +49,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--freeze-feature-epochs", type=int, default=2)
     parser.add_argument("--freeze-shared-epochs", type=int, default=0)
-    parser.add_argument("--freeze-dense-epochs", type=int, default=0)
-    parser.add_argument("--freeze-layout-geometry-epochs", type=int, default=0)
     parser.add_argument("--base-head-gradient-scale", type=float, default=1.0)
     parser.add_argument(
         "--target-mode",
@@ -66,27 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--family-weight", type=float, default=0.5)
     parser.add_argument("--identity-weight", type=float, default=0.75)
     parser.add_argument("--roi-weight", type=float, default=0.5)
-    parser.add_argument(
-        "--layout-proposals",
-        type=int,
-        default=None,
-        help="Direct ordered-corner proposals; zero disables the layout head",
-    )
-    parser.add_argument("--layout-coordinate-weight", type=float, default=5.0)
-    parser.add_argument("--layout-validity-weight", type=float, default=1.0)
-    parser.add_argument("--layout-proposal-weight", type=float, default=0.25)
-    parser.add_argument(
-        "--layout-orientation-class-weights",
-        default=None,
-        help="Comma-separated weights for the eight court orientation classes",
-    )
     parser.add_argument("--seed", type=int, default=36)
-    parser.add_argument(
-        "--save-every",
-        type=int,
-        default=0,
-        help="Also retain an epoch checkpoint at this interval; zero disables snapshots",
-    )
     parser.add_argument("--limit-train", type=int, default=0, help="Debug-only sample limit")
     parser.add_argument("--limit-valid", type=int, default=0, help="Debug-only sample limit")
     parser.add_argument("--no-amp", action="store_true")
@@ -107,18 +82,16 @@ def _to_device(target: dict[str, torch.Tensor], device: torch.device) -> dict[st
 
 
 def _run_epoch(
-    model: YOLO26CourtLine,
+    model: torch.nn.Module,
     loader: DataLoader,
     criterion: CourtLineLoss,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
-    scaler: GradScaler,
+    scaler: torch.amp.GradScaler,
     amp_enabled: bool,
     amp_dtype: torch.dtype,
     feature_frozen: bool,
     shared_frozen: bool,
-    dense_frozen: bool,
-    layout_geometry_frozen: bool,
 ) -> dict[str, float]:
     training = optimizer is not None
     model.train(training)
@@ -126,10 +99,6 @@ def _run_epoch(
         model.feature_layers.eval()
     if training and shared_frozen:
         model.set_shared_features_eval()
-    if training and dense_frozen:
-        model.set_dense_head_eval()
-    if training and layout_geometry_frozen:
-        model.set_layout_geometry_eval()
     totals = {
         key: 0.0
         for key in (
@@ -141,9 +110,6 @@ def _run_epoch(
             "family",
             "identity",
             "roi",
-            "layout_coordinate",
-            "layout_validity",
-            "layout_proposal",
         )
     }
     examples = 0
@@ -163,8 +129,8 @@ def _run_epoch(
                 enabled=amp_enabled,
             ),
         ):
-            prediction, layout_prediction = model.forward_outputs(images)
-            loss, parts = criterion(prediction, target, layout_prediction)
+            prediction = model(images)
+            loss, parts = criterion(prediction, target)
         if not torch.isfinite(loss):
             raise FloatingPointError(f"non-finite loss: {float(loss)}")
         if training:
@@ -189,10 +155,10 @@ def _run_epoch(
 
 
 def _checkpoint_payload(
-    model: YOLO26CourtLine,
+    model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
-    scaler: GradScaler,
+    scaler: torch.amp.GradScaler,
     args: argparse.Namespace,
     pose_checkpoint: str,
     epoch: int,
@@ -211,8 +177,6 @@ def _checkpoint_payload(
         "pose_architecture": DEFAULT_POSE_ARCHITECTURE,
         "fusion_channels": 64,
         "output_channels": int(model.output_channels),
-        "layout_proposals": int(model.layout_proposals),
-        "layout_head_version": DIRECT_LAYOUT_HEAD_VERSION if model.layout_proposals else 0,
         "stride": 4,
         "target_mode": args.target_mode,
         "sample_spacing": args.sample_spacing,
@@ -237,19 +201,10 @@ def _checkpoint_payload(
 
 def main() -> int:
     args = parse_args()
-    orientation_class_weights = (
-        tuple(float(value) for value in args.layout_orientation_class_weights.split(","))
-        if args.layout_orientation_class_weights
-        else None
-    )
-    if orientation_class_weights is not None and len(orientation_class_weights) != 8:
-        raise ValueError("--layout-orientation-class-weights requires eight values")
     if not args.pose_checkpoint and not args.weights:
         raise ValueError("pass --pose-checkpoint for initial transfer or --weights for fine-tuning")
     if args.epochs < 1:
         raise ValueError("--epochs must be positive")
-    if args.save_every < 0:
-        raise ValueError("--save-every cannot be negative")
     output = args.output.resolve()
     if output.exists() and any(output.iterdir()):
         raise FileExistsError(f"refusing to overwrite non-empty output: {output}")
@@ -261,12 +216,6 @@ def main() -> int:
             args.weights.resolve(), map_location="cpu", weights_only=False
         )
         checkpoint_mode = str(checkpoint_payload.get("target_mode", "center"))
-        checkpoint_layout_proposals = int(checkpoint_payload.get("layout_proposals", 0))
-        requested_layout_proposals = (
-            checkpoint_layout_proposals
-            if args.layout_proposals is None
-            else int(args.layout_proposals)
-        )
         requested_mode = args.target_mode or checkpoint_mode
         upgrade_context = checkpoint_mode == "dense_votes" and requested_mode in {
             "dense_context",
@@ -283,11 +232,6 @@ def main() -> int:
             output_channels_override=(
                 15 if requested_mode == "dense_semantic" else 8 if upgrade_context else None
             ),
-            layout_proposals_override=(
-                requested_layout_proposals
-                if requested_layout_proposals != checkpoint_layout_proposals
-                else None
-            ),
         )
         pose_checkpoint = str(
             args.pose_checkpoint.resolve()
@@ -295,7 +239,6 @@ def main() -> int:
             else metadata.get("resolved_pose_source", metadata["pose_checkpoint"])
         )
         args.target_mode = requested_mode
-        args.layout_proposals = requested_layout_proposals
         args.sample_spacing = float(metadata.get("sample_spacing", args.sample_spacing))
         args.intersection_exclusion = float(
             metadata.get("intersection_exclusion", args.intersection_exclusion)
@@ -307,7 +250,6 @@ def main() -> int:
         )
     else:
         args.target_mode = args.target_mode or "dense_votes"
-        args.layout_proposals = int(args.layout_proposals or 0)
         model, transfer_report = build_from_pose_checkpoint(
             args.pose_checkpoint.resolve(),
             output_channels={
@@ -316,7 +258,6 @@ def main() -> int:
                 "dense_context": 8,
                 "dense_semantic": 15,
             }[args.target_mode],
-            layout_proposals=args.layout_proposals,
         )
         model.to(device)
         pose_checkpoint = str(args.pose_checkpoint.resolve())
@@ -379,10 +320,6 @@ def main() -> int:
         family_weight=args.family_weight,
         identity_weight=args.identity_weight,
         roi_weight=args.roi_weight,
-        layout_coordinate_weight=args.layout_coordinate_weight,
-        layout_validity_weight=args.layout_validity_weight,
-        layout_proposal_weight=args.layout_proposal_weight,
-        layout_orientation_class_weights=orientation_class_weights,
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -392,7 +329,7 @@ def main() -> int:
     )
     amp_enabled = device.type == "cuda" and not args.no_amp
     amp_dtype = torch.bfloat16 if args.amp_dtype == "bf16" else torch.float16
-    scaler = GradScaler(
+    scaler = torch.amp.GradScaler(
         "cuda",
         enabled=amp_enabled and amp_dtype == torch.float16,
     )
@@ -404,8 +341,6 @@ def main() -> int:
         "lr",
         "feature_frozen",
         "shared_frozen",
-        "dense_frozen",
-        "layout_geometry_frozen",
         *[
             f"train_{key}"
             for key in (
@@ -417,9 +352,6 @@ def main() -> int:
                 "family",
                 "identity",
                 "roi",
-                "layout_coordinate",
-                "layout_validity",
-                "layout_proposal",
                 "target_collisions",
                 "target_votes",
                 "hard_negative_samples",
@@ -436,9 +368,6 @@ def main() -> int:
                 "family",
                 "identity",
                 "roi",
-                "layout_coordinate",
-                "layout_validity",
-                "layout_proposal",
                 "target_collisions",
                 "target_votes",
                 "hard_negative_samples",
@@ -453,11 +382,7 @@ def main() -> int:
             train_set.set_epoch(epoch)
             feature_frozen = epoch < args.freeze_feature_epochs
             shared_frozen = epoch < args.freeze_shared_epochs
-            dense_frozen = epoch < args.freeze_dense_epochs
-            layout_geometry_frozen = epoch < args.freeze_layout_geometry_epochs
             model.freeze_shared_features(shared_frozen)
-            model.freeze_dense_head(dense_frozen)
-            model.freeze_layout_geometry(layout_geometry_frozen)
             if not shared_frozen:
                 model.freeze_feature_extractor(feature_frozen)
             model.set_base_head_gradient_scale(args.base_head_gradient_scale)
@@ -472,8 +397,6 @@ def main() -> int:
                 amp_dtype,
                 feature_frozen,
                 shared_frozen,
-                dense_frozen,
-                layout_geometry_frozen,
             )
             validation_metrics = _run_epoch(
                 model,
@@ -486,8 +409,6 @@ def main() -> int:
                 amp_dtype,
                 False,
                 False,
-                False,
-                False,
             )
             scheduler.step()
             row = {
@@ -496,8 +417,6 @@ def main() -> int:
                 "lr": optimizer.param_groups[0]["lr"],
                 "feature_frozen": feature_frozen,
                 "shared_frozen": shared_frozen,
-                "dense_frozen": dense_frozen,
-                "layout_geometry_frozen": layout_geometry_frozen,
                 **{f"train_{key}": value for key, value in train_metrics.items()},
                 **{f"valid_{key}": value for key, value in validation_metrics.items()},
             }
@@ -519,8 +438,6 @@ def main() -> int:
             torch.save(payload, output / "last.pt")
             if improved:
                 torch.save(payload, output / "best.pt")
-            if args.save_every and (epoch + 1) % args.save_every == 0:
-                torch.save(payload, output / f"epoch-{epoch + 1:04d}.pt")
             print(json.dumps(row))
     return 0
 
