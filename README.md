@@ -24,11 +24,11 @@ with optical flow, so the overlay does not lag between layout-matcher passes.
 The published wheel is the simplest internal installation path:
 
 ```bash
-uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.0/volley_court_lines-0.1.0-py3-none-any.whl"
+uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.1/volley_court_lines-0.1.1-py3-none-any.whl"
 ```
 
 ```bash
-pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.0/volley_court_lines-0.1.0-py3-none-any.whl"
+pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.1/volley_court_lines-0.1.1-py3-none-any.whl"
 ```
 
 For development:
@@ -90,7 +90,8 @@ fallback and is not recommended for web previews.
 
 | Asset | Contents | SHA-256 |
 | --- | --- | --- |
-| [v1 checkpoint](https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt) | 1.62 M parameters, 6.67 MiB | `b0392c...19e86` |
+| [v2 semantic checkpoint](https://assets.hsulab.net/models/volley-court-lines/v2/court-line-yolo26n-semantic-v4.pt) | 1.62 M parameters, 6.39 MiB | `b4aed9...12b2b` |
+| [v1 checkpoint](https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt) | rollback artifact | `b0392c...19e86` |
 | [Synthetic dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-synthetic-combined-2000-camera-mode-v2.tar.gz) | 2,000 Blender images | `5f8fa0...78569` |
 | [Real dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-unified.tar.gz) | 357 real images | `a40be9...12a4c` |
 | [Demo video](https://assets.hsulab.net/demos/volley-court-lines/v1/clip-volley-court-lines-v1.mp4) | 1080p H.264/AAC | `b30846...5b4be` |
@@ -116,23 +117,24 @@ specifications.
 
 ## Quality snapshot
 
-On the 37-image real test split:
+Controlled H100 evaluation on the same 37-image real test split:
 
-- line-family accuracy: **81.35%** over matched lines;
-- line match recall: **90.61%**;
-- visible-keypoint PCK@1%: **48.50%**;
-- visible-keypoint precision@1%: **81.04%**;
-- layout status: 18 `ok`, 18 `ambiguous`, 1 `abstained`.
+| Path | PCK@1% | Precision@1% | Line recall | Family accuracy | Layout p99 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v2 semantic model + fixed solver | **28.05%** | **79.79%** | **78.87%** | **95.83%** | **2.33 ms** |
+| v1 production model + search solver | 24.69% | 74.16% | 72.77% | 88.39% | 307.83 ms |
 
-The 90% figure is line recall, not end-to-end keypoint accuracy. The layout matcher intentionally
-abstains or marks ambiguity when the visible evidence cannot determine a unique court.
+The fixed solver accepts 8/37 frames versus 11/37 for v1: it intentionally trades some coverage
+for higher accepted-layout precision and bounded latency. Missing/abstained points count against
+PCK. Full machine-readable reports are in `benchmarks/semantic-layout-v2-real-test.json` and
+`benchmarks/v3-layout-baseline-real-test.json`.
 
 ## Training design
 
-The released model follows two context stages after dense-vote initialization:
+The released v2 model follows two semantic stages after dense-vote initialization:
 
-1. **S1 synthetic:** 2,000 Blender images, 20 epochs, batch 64, BF16, frozen shared features.
-2. **S2 real:** 357 real images, 15 epochs, batch 32, BF16, synthetic best as initialization.
+1. **S1 synthetic:** 2,000 Blender images, 60 epochs, batch 64, BF16.
+2. **S2 real:** 357 real images, 40 epochs, batch 32, BF16, with 35% synthetic replay.
 
 This ordering teaches court geometry and camera coverage first, then adapts appearance to real
 broadcasts without discarding the learned topology. Exact commands and the limitations of the

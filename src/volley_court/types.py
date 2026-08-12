@@ -151,6 +151,8 @@ class CourtLayout:
     hypothesis_margin: float
     semantic_alignment: float | None
     homography: tuple[tuple[float, float, float], ...] | None
+    matcher_mode: str = "unknown"
+    hypotheses_evaluated: int = 0
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, Any]) -> CourtLayout:
@@ -186,6 +188,8 @@ class CourtLayout:
                 else None
             ),
             homography=homography,
+            matcher_mode=str(row.get("matcher_mode", "unknown")),
+            hypotheses_evaluated=int(row.get("hypotheses_evaluated", 0)),
         )
 
     def to_mapping(self) -> dict[str, Any]:
@@ -197,6 +201,8 @@ class CourtLayout:
             "hypothesis_margin": self.hypothesis_margin,
             "semantic_alignment": self.semantic_alignment,
             "homography": [list(row) for row in self.homography] if self.homography else None,
+            "matcher_mode": self.matcher_mode,
+            "hypotheses_evaluated": self.hypotheses_evaluated,
             "keypoints": [point.to_mapping() for point in self.keypoints],
             "candidate_keypoints": [point.to_mapping() for point in self.candidate_keypoints],
         }
