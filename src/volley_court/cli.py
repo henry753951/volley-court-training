@@ -19,7 +19,7 @@ from .visualization import CourtVisualizer, VisualizationConfig
 
 
 def _model_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--model", default="v1", help="Checkpoint path or bundled model name")
+    parser.add_argument("--model", default="v2", help="Checkpoint path or bundled model name")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.25)
@@ -44,7 +44,7 @@ def _model(args: argparse.Namespace) -> CourtLineModel:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="volley-court")
-    parser.add_argument("--version", action="version", version="%(prog)s 0.1.1")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
     commands = parser.add_subparsers(dest="command", required=True)
 
     download = commands.add_parser("download", help="Download and verify the default model")
@@ -64,15 +64,9 @@ def _parser() -> argparse.ArgumentParser:
     video.add_argument("source", type=Path)
     video.add_argument("output", type=Path)
     video.add_argument("--batch-size", type=int, default=8)
-    video.add_argument("--layout-every", type=int, default=10)
+    video.add_argument("--layout-every", type=int, default=1)
     video.add_argument("--labels", action=argparse.BooleanOptionalAction, default=False)
     video.add_argument("--keypoint-ids", action="store_true")
-    video.add_argument(
-        "--video-codec",
-        choices=("web", "mp4v"),
-        default="web",
-        help="web writes H.264/yuv420p/faststart and preserves source audio",
-    )
     video.add_argument("--max-frames", type=int, default=0)
     video.add_argument("--overwrite", action="store_true")
 
@@ -141,8 +135,7 @@ def _predict_video(args: argparse.Namespace) -> int:
         width=width,
         height=height,
         fps=fps,
-        codec=args.video_codec,
-        audio_source=args.source if args.video_codec == "web" else None,
+        audio_source=args.source,
     )
     model = _model(args)
     visualizer = CourtVisualizer(

@@ -17,13 +17,6 @@ class ModelSpec:
     filename: str
 
 
-LEGACY_MODEL = ModelSpec(
-    name="court-line-yolo26n-v3",
-    url=("https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt"),
-    sha256="b0392c221978c87405f2646f41f14c1b66d4e7940d07c4a19c170b8321119e86",
-    filename="court-line-yolo26n-v3.pt",
-)
-
 DEFAULT_MODEL = ModelSpec(
     name="court-line-yolo26n-semantic-v4",
     url=(
@@ -105,8 +98,6 @@ def resolve_model_path(model: str | Path | ModelSpec | None = None) -> Path:
         model = configured
     if model is None or model == "v2" or model == DEFAULT_MODEL.name:
         return download_model(DEFAULT_MODEL)
-    if model == "v1" or model == LEGACY_MODEL.name:
-        return download_model(LEGACY_MODEL)
     if isinstance(model, ModelSpec):
         return download_model(model)
     path = Path(model).expanduser().resolve()
