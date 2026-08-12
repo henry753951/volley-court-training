@@ -137,7 +137,6 @@ def _run_epoch(
             "roi",
             "layout_coordinate",
             "layout_validity",
-            "layout_proposal",
         )
     }
     examples = 0
@@ -404,7 +403,6 @@ def main() -> int:
                 "roi",
                 "layout_coordinate",
                 "layout_validity",
-                "layout_proposal",
                 "target_collisions",
                 "target_votes",
                 "hard_negative_samples",
@@ -423,7 +421,6 @@ def main() -> int:
                 "roi",
                 "layout_coordinate",
                 "layout_validity",
-                "layout_proposal",
                 "target_collisions",
                 "target_votes",
                 "hard_negative_samples",
