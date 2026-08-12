@@ -14,7 +14,7 @@ import yaml
 from PIL import Image, ImageFile
 
 from .geometry import PointSample, fit_line_group, parse_yolo_pose_line
-from .layout import draw_layout_overlay, match_semantic_court_layout
+from .layout import draw_layout_overlay, match_court_layout, match_semantic_court_layout
 from .topology import load_topology
 
 THRESHOLDS = (0.005, 0.01, 0.02)
@@ -37,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split", choices=("train", "val", "test"), default="test")
     parser.add_argument("--minimum-keypoint-score", type=float, default=0.0)
+    parser.add_argument("--minimum-hypothesis-margin", type=float, default=None)
+    parser.add_argument("--layout-solver", choices=("search", "semantic"), default="search")
     parser.add_argument("--no-overlays", action="store_true")
     return parser.parse_args()
 
@@ -264,8 +266,12 @@ def evaluate(
     *,
     split: str = "test",
     minimum_keypoint_score: float = 0.0,
+    minimum_hypothesis_margin: float | None = None,
+    layout_solver: str = "search",
     write_overlays: bool = True,
 ) -> dict[str, Any]:
+    if layout_solver not in {"search", "semantic"}:
+        raise ValueError(f"unsupported layout solver: {layout_solver}")
     image_directories = _split_directories(dataset_yaml, split)
     images = sorted(
         path for directory in image_directories for path in directory.iterdir() if path.is_file()
@@ -288,7 +294,15 @@ def evaluate(
         image = _read_image(image_path)
         height, width = image.shape[:2]
         gt, box = _read_label(_label_path(image_path))
-        layout = match_semantic_court_layout(prediction_segments, width, height)
+        if layout_solver == "semantic":
+            layout = match_semantic_court_layout(prediction_segments, width, height)
+        else:
+            layout = match_court_layout(
+                prediction_segments,
+                width,
+                height,
+                minimum_hypothesis_margin=minimum_hypothesis_margin,
+            )
         statuses[layout["status"]] += 1
         predicted_keypoints = layout.get("keypoints", [])
         visible = _update_keypoint_metrics(
@@ -351,7 +365,8 @@ def evaluate(
             "matched_recall": family["matched_lines"] / max(family["gt_lines"], 1),
         },
         "threshold_definition": "fraction of labelled court bounding-box diagonal",
-        "layout_solver": "semantic",
+        "minimum_hypothesis_margin": minimum_hypothesis_margin,
+        "layout_solver": layout_solver,
     }
     (output / "per-image.json").write_text(json.dumps(per_image, indent=2) + "\n", encoding="utf-8")
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
@@ -367,6 +382,8 @@ def main() -> int:
         args.output.resolve(),
         split=args.split,
         minimum_keypoint_score=args.minimum_keypoint_score,
+        minimum_hypothesis_margin=args.minimum_hypothesis_margin,
+        layout_solver=args.layout_solver,
         write_overlays=not args.no_overlays,
     )
     print(json.dumps(summary, indent=2))

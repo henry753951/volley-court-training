@@ -3,8 +3,9 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
-from typing import BinaryIO, Protocol, cast
+from typing import Any, BinaryIO, Protocol, cast
 
+import cv2
 import numpy as np
 
 from .types import Image
@@ -36,7 +37,10 @@ class WebVideoWriter:
     ) -> None:
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg is None:
-            raise RuntimeError("ffmpeg is required for browser-compatible MP4 output")
+            raise RuntimeError(
+                "ffmpeg is required for web-compatible MP4 output; install ffmpeg "
+                "or pass --video-codec mp4v"
+            )
         command = [
             ffmpeg,
             "-hide_banner",
@@ -118,18 +122,41 @@ class WebVideoWriter:
             raise RuntimeError(f"ffmpeg failed with exit code {return_code}: {stderr.strip()}")
 
 
+class LegacyMp4vWriter:
+    """OpenCV MPEG-4 Part 2 fallback; not recommended for web previews."""
+
+    codec = "mpeg4/mp4v"
+
+    def __init__(self, output: str | Path, *, width: int, height: int, fps: float) -> None:
+        fourcc = cast(Any, cv2).VideoWriter_fourcc(*"mp4v")
+        self._writer = cv2.VideoWriter(str(output), fourcc, fps, (width, height))
+        if not self._writer.isOpened():
+            raise RuntimeError(f"could not open video writer: {output}")
+
+    def write(self, frame: Image) -> None:
+        self._writer.write(frame)
+
+    def close(self) -> None:
+        self._writer.release()
+
+
 def open_video_writer(
     output: str | Path,
     *,
     width: int,
     height: int,
     fps: float,
+    codec: str = "web",
     audio_source: str | Path | None = None,
 ) -> VideoWriter:
-    return WebVideoWriter(
-        output,
-        width=width,
-        height=height,
-        fps=fps,
-        audio_source=audio_source,
-    )
+    if codec == "web":
+        return WebVideoWriter(
+            output,
+            width=width,
+            height=height,
+            fps=fps,
+            audio_source=audio_source,
+        )
+    if codec == "mp4v":
+        return LegacyMp4vWriter(output, width=width, height=height, fps=fps)
+    raise ValueError(f"unsupported video codec: {codec}")

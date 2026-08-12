@@ -10,7 +10,7 @@ import torch
 
 from .assets import ModelSpec, resolve_model_path
 from .inference import infer_frame, infer_frames, resolve_device
-from .layout import match_semantic_court_layout
+from .layout import match_court_layout, match_semantic_court_layout
 from .model import YOLO26CourtLine, load_court_line_checkpoint
 from .types import CourtFrameResult, CourtLayout, CourtLine, Image
 
@@ -151,7 +151,8 @@ class CourtLineModel:
         *,
         prior_layout: CourtLayout | None = None,
     ) -> CourtFrameResult:
-        raw = match_semantic_court_layout(
+        matcher = match_semantic_court_layout if self.semantic_layout_v2 else match_court_layout
+        raw = matcher(
             [line.to_mapping() for line in result.lines],
             result.width,
             result.height,

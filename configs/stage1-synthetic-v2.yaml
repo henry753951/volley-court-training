@@ -1,7 +1,7 @@
 schema: volley-court-lines-training-stage-v1
 name: s1-synthetic-semantic-v4
 dataset: court36-synthetic-combined-2000-camera-mode-v2
-initialization: court-line-yolo26n-semantic-v4
+initialization: court-line-yolo26n-v3-synthetic-best
 target_mode: dense_semantic
 epochs: 60
 batch: 64

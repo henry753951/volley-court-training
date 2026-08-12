@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from volley_court import assets
 
 
-def test_model_aliases_resolve_only_current_release(monkeypatch) -> None:
+def test_model_aliases_keep_v1_as_rollback(monkeypatch) -> None:
     monkeypatch.setattr(
         assets,
         "download_model",
@@ -16,5 +14,4 @@ def test_model_aliases_resolve_only_current_release(monkeypatch) -> None:
 
     assert assets.resolve_model_path().name == "court-line-yolo26n-semantic-v4.pt"
     assert assets.resolve_model_path("v2").name == "court-line-yolo26n-semantic-v4.pt"
-    with pytest.raises(FileNotFoundError):
-        assets.resolve_model_path("v1")
+    assert assets.resolve_model_path("v1").name == "court-line-yolo26n-v3.pt"

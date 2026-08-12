@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -73,6 +74,8 @@ CANONICAL_LINES: tuple[CanonicalLine, ...] = (
     CanonicalLine(5, "center", "horizontal", (0.0, 9.0), (9.0, 9.0)),
     CanonicalLine(6, "far_attack", "horizontal", (0.0, 12.0), (9.0, 12.0)),
 )
+
+HORIZONTAL_Y = (0.0, 6.0, 9.0, 12.0, 18.0)
 
 
 @dataclass(frozen=True)
@@ -170,6 +173,47 @@ def _axial_clusters(
     )
 
 
+def _family_assignments(
+    lines: Sequence[ObservedLine],
+    angle_degrees: float = 15.0,
+) -> list[tuple[list[ObservedLine], list[ObservedLine]]]:
+    """Return family candidates, including strong-perspective three-angle views.
+
+    The two sidelines can diverge sharply in the image even though they share a
+    court-coordinate family.  A plain two-angle clustering therefore is only one
+    candidate; dominant coherent transverse groups are also tested against all
+    remaining lines.
+    """
+
+    assignments: list[tuple[list[ObservedLine], list[ObservedLine]]] = []
+    seen: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+
+    def retain(first: Sequence[ObservedLine], second: Sequence[ObservedLine]) -> None:
+        if len(first) < 2 or len(second) < 2:
+            return
+        key = (
+            tuple(sorted(line.index for line in first)),
+            tuple(sorted(line.index for line in second)),
+        )
+        reverse = (key[1], key[0])
+        if key in seen or reverse in seen:
+            return
+        seen.add(key)
+        assignments.append((list(first), list(second)))
+
+    cluster_a, cluster_b, _separation = _axial_clusters(lines)
+    retain(cluster_a, cluster_b)
+    predicted_vertical = [line for line in lines if line.family == "vertical"]
+    predicted_horizontal = [line for line in lines if line.family == "horizontal"]
+    retain(predicted_vertical, predicted_horizontal)
+    threshold = math.cos(math.radians(2.0 * angle_degrees))
+    for seed in lines:
+        coherent = [line for line in lines if float(np.dot(seed.axial, line.axial)) >= threshold]
+        coherent_indices = {line.index for line in coherent}
+        retain(coherent, [line for line in lines if line.index not in coherent_indices])
+    return assignments
+
+
 def _intersection(first: ObservedLine, second: ObservedLine) -> tuple[float, float] | None:
     a1, b1, c1 = first.equation
     a2, b2, c2 = second.equation
@@ -243,6 +287,56 @@ def _project_line(
     return clip_segment_to_image(points.reshape(-1).tolist(), width, height)
 
 
+def _match_projected_lines(
+    homography: np.ndarray,
+    vertical: Sequence[ObservedLine],
+    horizontal: Sequence[ObservedLine],
+    width: int,
+    height: int,
+) -> tuple[list[dict[str, Any]], float, int]:
+    proposals: list[tuple[float, int, int, tuple[float, float, float, float]]] = []
+    projected: dict[int, tuple[float, float, float, float]] = {}
+    for canonical in CANONICAL_LINES:
+        segment = _project_line(homography, canonical, width, height)
+        if segment is None:
+            continue
+        projected[canonical.topology_index] = segment
+        candidates = vertical if canonical.family == "vertical" else horizontal
+        for candidate in candidates:
+            quality = _line_match_quality(segment, candidate)
+            if len(candidate.identity_probabilities) == 7:
+                semantic = candidate.identity_probabilities[canonical.topology_index]
+                quality *= 0.85 + 0.30 * semantic
+            proposals.append((quality, canonical.topology_index, candidate.index, segment))
+    retained: dict[int, tuple[float, int]] = {}
+    used_observed: set[int] = set()
+    for quality, topology_index, observed_index, _segment in sorted(proposals, reverse=True):
+        if quality < 0.04 or topology_index in retained or observed_index in used_observed:
+            continue
+        retained[topology_index] = (quality, observed_index)
+        used_observed.add(observed_index)
+    rows = []
+    for canonical in CANONICAL_LINES:
+        segment = projected.get(canonical.topology_index)
+        if segment is None:
+            continue
+        match = retained.get(canonical.topology_index)
+        rows.append(
+            {
+                "topology_index": canonical.topology_index,
+                "name": canonical.name,
+                "family": canonical.family,
+                "segment": list(segment),
+                "source_index": match[1] if match else None,
+                "match_score": match[0] if match else 0.0,
+            }
+        )
+    matched = len(retained)
+    geometry = sum(value[0] for value in retained.values()) / max(matched, 1)
+    coverage = matched / len(CANONICAL_LINES)
+    return rows, 0.55 * coverage + 0.45 * geometry, matched
+
+
 def _court_convention_score(homography: np.ndarray) -> float:
     corners = _project_points(homography, ((0.0, 0.0), (9.0, 0.0), (0.0, 18.0), (9.0, 18.0)))
     if corners is None:
@@ -251,6 +345,105 @@ def _court_convention_score(homography: np.ndarray) -> float:
     far_y = float(np.mean(corners[2:, 1]))
     near_left_x, near_right_x = float(corners[0, 0]), float(corners[1, 0])
     return float(near_y > far_y) * 0.5 + float(near_left_x < near_right_x) * 0.5
+
+
+def _candidate_homographies(
+    vertical: Sequence[ObservedLine],
+    horizontal: Sequence[ObservedLine],
+) -> Iterable[np.ndarray]:
+    vertical = sorted(vertical, key=lambda row: row.score * math.sqrt(row.length), reverse=True)[:5]
+    horizontal = sorted(
+        horizontal, key=lambda row: row.score * math.sqrt(row.length), reverse=True
+    )[:8]
+    for side_a, side_b in itertools.combinations(vertical, 2):
+        for cross_a, cross_b in itertools.combinations(horizontal, 2):
+            intersections = (
+                _intersection(side_a, cross_a),
+                _intersection(side_b, cross_a),
+                _intersection(side_a, cross_b),
+                _intersection(side_b, cross_b),
+            )
+            if any(point is None for point in intersections):
+                continue
+            destination = np.asarray(intersections, dtype=np.float32)
+            polygon = destination[[0, 1, 3, 2]].reshape(-1, 1, 2)
+            if abs(float(cv2.contourArea(polygon))) < 16.0:
+                continue
+            for y_first, y_second in itertools.combinations(HORIZONTAL_Y, 2):
+                for swap_x in (False, True):
+                    for swap_y in (False, True):
+                        x0, x1 = (9.0, 0.0) if swap_x else (0.0, 9.0)
+                        y0, y1 = (y_second, y_first) if swap_y else (y_first, y_second)
+                        source = np.asarray(
+                            ((x0, y0), (x1, y0), (x0, y1), (x1, y1)),
+                            dtype=np.float32,
+                        )
+                        homography = cv2.getPerspectiveTransform(source, destination)
+                        if np.isfinite(homography).all():
+                            yield homography
+
+
+def _prior_refined_homographies(
+    prior_homography: np.ndarray,
+    vertical: Sequence[ObservedLine],
+    horizontal: Sequence[ObservedLine],
+    width: int,
+    height: int,
+) -> Iterable[np.ndarray]:
+    """Refit a prior topology to the current frame's observed line equations."""
+
+    rows, _score, _matched = _match_projected_lines(
+        prior_homography,
+        vertical,
+        horizontal,
+        width,
+        height,
+    )
+    observed_by_index = {line.index: line for line in (*vertical, *horizontal)}
+    matched_by_topology = {
+        int(row["topology_index"]): observed_by_index[int(source_index)]
+        for row in rows
+        if (source_index := row.get("source_index")) is not None
+        and int(source_index) in observed_by_index
+    }
+    left = matched_by_topology.get(0)
+    right = matched_by_topology.get(2)
+    if left is None or right is None:
+        return
+
+    horizontal_y = {1: 18.0, 3: 0.0, 4: 6.0, 5: 9.0, 6: 12.0}
+    matched_horizontal = [
+        (topology, matched_by_topology[topology])
+        for topology in horizontal_y
+        if topology in matched_by_topology
+    ]
+    for (first_topology, first), (second_topology, second) in itertools.combinations(
+        matched_horizontal, 2
+    ):
+        intersections = (
+            _intersection(left, first),
+            _intersection(right, first),
+            _intersection(left, second),
+            _intersection(right, second),
+        )
+        if any(point is None for point in intersections):
+            continue
+        destination = np.asarray(intersections, dtype=np.float32)
+        polygon = destination[[0, 1, 3, 2]].reshape(-1, 1, 2)
+        if abs(float(cv2.contourArea(polygon))) < 16.0:
+            continue
+        source = np.asarray(
+            (
+                (0.0, horizontal_y[first_topology]),
+                (9.0, horizontal_y[first_topology]),
+                (0.0, horizontal_y[second_topology]),
+                (9.0, horizontal_y[second_topology]),
+            ),
+            dtype=np.float32,
+        )
+        homography = cv2.getPerspectiveTransform(source, destination)
+        if np.isfinite(homography).all():
+            yield homography
 
 
 def _keypoint_parents() -> tuple[tuple[int, ...], ...]:
@@ -681,6 +874,239 @@ def match_semantic_court_layout(
         "hypotheses_evaluated": len(permutations),
         "homography": homography.tolist(),
         "lines": line_rows,
+        "segments": classified_segments,
+        "keypoints": keypoints if status == "ok" else [],
+        "candidate_keypoints": keypoints,
+    }
+
+
+def match_court_layout(
+    segments: Sequence[dict[str, Any]],
+    width: int,
+    height: int,
+    *,
+    minimum_family_separation_degrees: float = 18.0,
+    minimum_matched_lines: int = 4,
+    minimum_layout_score: float = 0.45,
+    minimum_hypothesis_margin: float | None = None,
+    minimum_semantic_alignment: float = 0.22,
+    minimum_semantic_matched_lines: int = 5,
+    prior_homography: Sequence[Sequence[float]] | np.ndarray | None = None,
+    maximum_prior_displacement_ratio: float = 0.12,
+) -> dict[str, Any]:
+    """Fit the seven-line court template and recover the original Pose36 indices."""
+
+    observed = _observed_lines(segments)
+    _cluster_a, _cluster_b, separation = _axial_clusters(observed)
+    assignments = _family_assignments(observed)
+    if not assignments:
+        return {
+            "status": "abstained",
+            "reason": "two stable line families were not found",
+            "family_separation_degrees": separation,
+            "layout_score": 0.0,
+            "keypoints": [],
+            "lines": [],
+        }
+    hypotheses: list[
+        tuple[float, int, np.ndarray, list[dict[str, Any]], list[ObservedLine], list[ObservedLine]]
+    ] = []
+    directed_assignments = [
+        directed for first, second in assignments for directed in ((first, second), (second, first))
+    ]
+    directed_assignments.sort(
+        key=lambda row: (
+            0.25 * sum(line.family not in {None, "vertical"} for line in row[0])
+            + 0.25 * sum(line.family not in {None, "horizontal"} for line in row[1])
+            + abs(len(row[0]) - 2)
+            + 0.5 * abs(len(row[1]) - 5)
+        )
+    )
+    matcher_mode = "full_search"
+    hypotheses_evaluated = 0
+    prior = None
+    prior_points = None
+    maximum_displacement = maximum_prior_displacement_ratio * math.hypot(width, height)
+    if prior_homography is not None:
+        candidate_prior = np.asarray(prior_homography, dtype=np.float64)
+        if candidate_prior.shape == (3, 3) and np.isfinite(candidate_prior).all():
+            prior = candidate_prior
+
+    if prior is not None:
+        prior_points = _project_points(prior, CANONICAL_KEYPOINTS)
+        for vertical, horizontal in directed_assignments[:8]:
+            for homography in _prior_refined_homographies(
+                prior,
+                vertical,
+                horizontal,
+                width,
+                height,
+            ):
+                hypotheses_evaluated += 1
+                convention = _court_convention_score(homography)
+                if convention < 1.0:
+                    continue
+                candidate_points = _project_points(homography, CANONICAL_KEYPOINTS)
+                if prior_points is None or candidate_points is None:
+                    continue
+                displacement = float(
+                    np.median(np.linalg.norm(candidate_points - prior_points, axis=1))
+                )
+                if displacement > maximum_displacement:
+                    continue
+                line_rows, line_score, matched = _match_projected_lines(
+                    homography,
+                    vertical,
+                    horizontal,
+                    width,
+                    height,
+                )
+                score = 0.92 * line_score + 0.08 * convention
+                hypotheses.append(
+                    (score, matched, homography, line_rows, list(vertical), list(horizontal))
+                )
+        if hypotheses and max(row[1] for row in hypotheses) >= minimum_matched_lines:
+            matcher_mode = "prior_refined"
+        else:
+            hypotheses.clear()
+
+    if not hypotheses:
+        for vertical, horizontal in directed_assignments[:8]:
+            for homography in _candidate_homographies(vertical, horizontal):
+                hypotheses_evaluated += 1
+                convention = _court_convention_score(homography)
+                if convention < 1.0:
+                    continue
+                if prior_points is not None:
+                    candidate_points = _project_points(homography, CANONICAL_KEYPOINTS)
+                    if candidate_points is None:
+                        continue
+                    displacement = float(
+                        np.median(np.linalg.norm(candidate_points - prior_points, axis=1))
+                    )
+                    if displacement > maximum_displacement:
+                        continue
+                line_rows, line_score, matched = _match_projected_lines(
+                    homography,
+                    vertical,
+                    horizontal,
+                    width,
+                    height,
+                )
+                score = 0.92 * line_score + 0.08 * convention
+                hypotheses.append(
+                    (score, matched, homography, line_rows, list(vertical), list(horizontal))
+                )
+    if not hypotheses:
+        return {
+            "status": "abstained",
+            "reason": "no valid court homography hypothesis",
+            "family_separation_degrees": separation,
+            "layout_score": 0.0,
+            "matcher_mode": matcher_mode,
+            "hypotheses_evaluated": hypotheses_evaluated,
+            "keypoints": [],
+            "lines": [],
+        }
+    hypotheses.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    best = hypotheses[0]
+    best_points = _project_points(best[2], CANONICAL_KEYPOINTS)
+    best_signature = tuple(row.get("source_index") for row in best[3])
+    runner_up = next(
+        (
+            row
+            for row in hypotheses[1:]
+            if (
+                tuple(item.get("source_index") for item in row[3]) != best_signature
+                and (
+                    best_points is None
+                    or (candidate_points := _project_points(row[2], CANONICAL_KEYPOINTS)) is None
+                    or float(np.max(np.linalg.norm(candidate_points - best_points, axis=1))) > 2.0
+                )
+            )
+        ),
+        None,
+    )
+    margin = (
+        best[0]
+        if matcher_mode == "prior_refined"
+        else best[0] - runner_up[0]
+        if runner_up is not None
+        else best[0]
+    )
+    observed_by_index = {line.index: line for line in observed}
+    semantic_scores = []
+    for row in best[3]:
+        source_index = row.get("source_index")
+        if source_index is None:
+            continue
+        candidate = observed_by_index.get(int(source_index))
+        topology_index = int(row["topology_index"])
+        if candidate is not None and len(candidate.identity_probabilities) == 7:
+            semantic_scores.append(candidate.identity_probabilities[topology_index])
+    semantic_alignment = float(np.mean(semantic_scores)) if semantic_scores else None
+    required_margin = (
+        float(minimum_hypothesis_margin)
+        if minimum_hypothesis_margin is not None
+        else 0.005
+        if semantic_alignment is not None
+        else 0.015
+    )
+    status = "ok"
+    reason = None
+    if best[1] < minimum_matched_lines:
+        status, reason = "abstained", "fewer than four template lines matched"
+    elif best[0] < minimum_layout_score:
+        status, reason = "abstained", "layout score below threshold"
+    elif margin < required_margin:
+        status, reason = "ambiguous", "multiple court identities have similar scores"
+    elif semantic_alignment is not None and best[1] < minimum_semantic_matched_lines:
+        status, reason = "ambiguous", "semantic layout has fewer than five matched lines"
+    elif semantic_alignment is not None and semantic_alignment < minimum_semantic_alignment:
+        status, reason = "ambiguous", "semantic line identities do not support the layout"
+
+    projected = _project_points(best[2], CANONICAL_KEYPOINTS)
+    if projected is None:
+        status, reason = "abstained", "homography produced invalid keypoints"
+        projected = np.empty((0, 2), dtype=np.float64)
+    line_scores = {int(row["topology_index"]): float(row["match_score"]) for row in best[3]}
+    keypoints = []
+    for index, point in enumerate(projected):
+        parents = KEYPOINT_PARENTS[index]
+        parent_score = sum(line_scores.get(parent, 0.0) for parent in parents) / len(parents)
+        in_frame = bool(0.0 <= point[0] < width and 0.0 <= point[1] < height)
+        keypoints.append(
+            {
+                "id": index,
+                "x": float(point[0]),
+                "y": float(point[1]),
+                "score": float(np.clip(best[0] * parent_score, 0.0, 1.0)),
+                "in_frame": in_frame,
+                "source": "line_intersection" if len(parents) == 2 else "homography_projection",
+            }
+        )
+    family_by_index = {
+        line.index: family
+        for family, rows in (("vertical", best[4]), ("horizontal", best[5]))
+        for line in rows
+    }
+    classified_segments = [
+        {**row, "family": family_by_index.get(index, "unknown")}
+        for index, row in enumerate(segments)
+    ]
+    return {
+        "status": status,
+        "reason": reason,
+        "layout_score": float(best[0]),
+        "hypothesis_margin": float(margin),
+        "required_hypothesis_margin": required_margin,
+        "semantic_alignment": semantic_alignment,
+        "family_separation_degrees": float(separation),
+        "matched_line_count": int(best[1]),
+        "matcher_mode": matcher_mode,
+        "hypotheses_evaluated": hypotheses_evaluated,
+        "homography": best[2].tolist(),
+        "lines": best[3],
         "segments": classified_segments,
         "keypoints": keypoints if status == "ok" else [],
         "candidate_keypoints": keypoints,

@@ -31,9 +31,10 @@ should be caught.
 
 ## Recorded semantic-v4 stages
 
-The published v2 checkpoint is the supported initialization for continued training. The release
-run used the converted target roots created above and retained all 2,000 synthetic and 357 real
-images.
+The release was initialized from an internal dense-votes checkpoint. Replace `$DENSE_BASE` with
+that checkpoint to reproduce the historical lineage. For a new fine-tuning run, the published v1
+checkpoint can be passed to `--weights` instead. The release run used the converted target roots
+created above and retained all 2,000 synthetic and 357 real images.
 
 ### S1: synthetic context
 
@@ -41,7 +42,7 @@ images.
 uv run volley-court-train \
   --data .work/synthetic-lines \
   --image-root datasets/court36-synthetic-combined-2000-camera-mode-v2 \
-  --weights path/to/court-line-yolo26n-semantic-v4.pt \
+  --weights "$DENSE_BASE" \
   --output runs/s1-semantic-v4 \
   --target-mode dense_semantic \
   --epochs 60 --batch 64 --workers 12 --imgsz 640 --device cuda:0 \
@@ -91,6 +92,17 @@ uv run volley-court-evaluate \
 
 Use line recall, family accuracy, precision, PCK, and the layout status distribution together.
 Do not gate the release solely on training loss or call line recall “keypoint accuracy.”
+
+For the fixed solver comparison:
+
+```bash
+uv run python benchmarks/compare_layout_solvers.py \
+  --checkpoint runs/s2-semantic-v4/best.pt \
+  --dataset datasets/court36-unified/dataset.yaml \
+  --topology configs/court_line_topology.yaml \
+  --output benchmarks/layout-ab \
+  --device cuda:0 --batch-size 16 --confidence 0.25 --repeats 20
+```
 
 ## Extending the architecture
 

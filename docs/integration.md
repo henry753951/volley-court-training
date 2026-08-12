@@ -28,7 +28,9 @@ class CourtEstimator:
                 frame_pos_px=(point.x, point.y),
                 confidence=point.score,
                 world_pos_m=(
-                    COURT_WORLD_POINTS[point.id] if point.id < len(COURT_WORLD_POINTS) else None
+                    COURT_WORLD_POINTS[point.id]
+                    if point.id < len(COURT_WORLD_POINTS)
+                    else None
                 ),
             )
             for point in result.layout.keypoints
