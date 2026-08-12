@@ -5,7 +5,7 @@
 | Item | Value |
 | --- | ---: |
 | checkpoint | 6,930,363 bytes / 6.61 MiB |
-| parameters | 1,663,200 |
+| parameters | 1,659,096 |
 | estimated compute at 512 px | 5.86 GFLOPs |
 | dense output stride | 4 |
 | dense channels | 15 |
@@ -13,23 +13,23 @@
 
 ## Batch-1 direct-layout latency
 
-Both rows use the released v2 checkpoint, 512 px FP16, fused inference, and include image
+Both rows are the 2026-08-13 rerun of the released v2 checkpoint, 512 px FP16, fused inference, and include image
 preprocessing, device transfer, model forward, decode, direct-layout verification, and typed result
 construction. Frames were preloaded so file decode is excluded.
 
 | GPU | Frames | Core FPS | Pipeline FPS | Mean | p50 | p95 | Peak CUDA memory |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| RTX 5070 | 300 | 106.24 | 73.69 | 13.57 ms | 12.93 ms | 18.41 ms | 56.2 MiB |
-| H100 NVL | 512 | 152.43 | 86.68 | 11.54 ms | 10.16 ms | 26.17 ms | 58.2 MiB |
+| RTX 5070 | 512 | 129.04 | 89.23 | 11.21 ms | 10.96 ms | 13.14 ms | 56.2 MiB |
+| H100 NVL | 512 | 159.71 | 94.90 | 10.54 ms | 10.06 ms | 11.53 ms | 58.2 MiB |
 
 Raw reports:
 
 - [`benchmarks/rtx5070-direct-layout-v2-img512.json`](../benchmarks/rtx5070-direct-layout-v2-img512.json)
 - [`benchmarks/raw/h100-direct-layout-v2-img512.json`](../benchmarks/raw/h100-direct-layout-v2-img512.json)
 
-The RTX row is the median-timing run from three repeated measurements; one run under concurrent GPU
-load reached 21.03 ms p95. The H100 is a shared host, so its p95 also includes observed system tail
-latency. These are operational measurements, not a controlled comparison of GPU architectures.
+The RTX and H100 rows are single warm-cache reruns on their respective hosts. The H100 is a shared
+host, so its timings include observed system load. These are operational measurements, not a
+controlled comparison of GPU architectures.
 
 ## Browser-safe demo
 

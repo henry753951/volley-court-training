@@ -6,9 +6,9 @@
   "torch_cuda": "12.8",
   "device": "cuda:0",
   "gpu": "NVIDIA GeForce RTX 5070",
-  "checkpoint": "H:\\Repos\\volley-court-training-semantic-layout\\artifacts\\candidate-anchor-s6\\court-line-yolo26n-anchor-s6-e20.pt",
+  "checkpoint": "models/volley-court-lines/v2/court-line-yolo26n-layout-v2.pt",
   "checkpoint_bytes": 6930363,
-  "parameters": 1663200,
+  "parameters": 1659096,
   "estimated_gflops_640": 9.16,
   "image_size": 512,
   "half": true,
@@ -20,15 +20,15 @@
   "results": [
     {
       "batch_size": 1,
-      "frames": 300,
-      "batches": 300,
-      "core_fps": 106.24200838626405,
-      "pipeline_fps": 73.68630399313321,
-      "mean_frame_latency_ms": 13.571042999974452,
-      "p50_batch_latency_ms": 12.929749995237216,
-      "p95_batch_latency_ms": 18.40563000878319,
-      "peak_cuda_memory_bytes": 58929664
+      "frames": 512,
+      "batches": 512,
+      "core_fps": 129.04225493746029,
+      "pipeline_fps": 89.2313296078059,
+      "mean_frame_latency_ms": 11.206826171875406,
+      "p50_batch_latency_ms": 10.963249999804248,
+      "p95_batch_latency_ms": 13.139434999175137,
+      "peak_cuda_memory_bytes": 58920960
     }
   ],
-  "source": "H:\\Repos\\volley-court-training\\test-videos\\clip.mp4"
+  "source": "test-videos/clip.mp4"
 }

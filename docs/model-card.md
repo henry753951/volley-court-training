@@ -19,7 +19,7 @@ Unsupported frames do not receive a connected court.
 - URL: <https://assets.hsulab.net/models/volley-court-lines/v2/court-line-yolo26n-layout-v2.pt>
 - SHA-256: `8fa56841200c5bc09635a2b26325a88e596a0f1198791ba5860af96ca41a0abd`
 - size: 6,930,363 bytes (6.61 MiB)
-- parameters: 1,663,200
+- parameters: 1,659,096
 - recommended input: 512 px, FP16 on CUDA
 - estimated compute: 5.86 GFLOPs at 512 px (9.16 GFLOPs at 640 px)
 - checkpoint format: `yolo26n-court-line-v1`, direct-layout head version 5

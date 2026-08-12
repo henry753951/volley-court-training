@@ -104,12 +104,12 @@ direct-layout verification, and result construction.
 
 | GPU / path | Batch | Core FPS | Pipeline FPS | Latency |
 | --- | ---: | ---: | ---: | ---: |
-| RTX 5070, direct layout | 1 | 106.24 | 73.69 | 12.93 ms p50 / 18.41 ms p95 |
-| H100 NVL, direct layout | 1 | 152.43 | 86.68 | 10.16 ms p50 / 26.17 ms p95 |
+| RTX 5070, direct layout | 1 | 129.04 | 89.23 | 10.96 ms p50 / 13.14 ms p95 |
+| H100 NVL, direct layout | 1 | 159.71 | 94.90 | 10.06 ms p50 / 11.53 ms p95 |
 | RTX 5070, 1080p H.264 demo | 8 | 393.83 model/decode | 62.74 end-to-end | layout inferred every frame |
 
-The H100 and RTX 5070 rows use different source videos and benchmark harness revisions; they are
-operational measurements, not a claim that one GPU is universally faster. The browser-safe demo was
+The H100 and RTX 5070 rows are independent operational measurements on different hosts, not a
+claim that one GPU is universally faster. The browser-safe demo was
 regenerated after the temporal identity matcher fix: 769 frames were accepted and 115 frames
 abstained, with no ambiguous layout. See
 [docs/benchmarks.md](docs/benchmarks.md) for methodology, raw JSON, memory use, and hardware

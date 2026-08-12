@@ -6,9 +6,9 @@
   "torch_cuda": "12.8",
   "device": "cuda:0",
   "gpu": "NVIDIA H100 NVL",
-  "checkpoint": "/home/nckusoc/volley-court-training-direct-layout/runs/direct-layout-s6-spatial-orientation-v1-20260813/epoch-0020.pt",
+  "checkpoint": "models/volley-court-lines/v2/court-line-yolo26n-layout-v2.pt",
   "checkpoint_bytes": 6930363,
-  "parameters": 1663200,
+  "parameters": 1659096,
   "estimated_gflops_640": 9.16,
   "image_size": 512,
   "half": true,
@@ -22,13 +22,13 @@
       "batch_size": 1,
       "frames": 512,
       "batches": 512,
-      "core_fps": 152.42977764320918,
-      "pipeline_fps": 86.6814387820805,
-      "mean_frame_latency_ms": 11.5364951718675,
-      "p50_batch_latency_ms": 10.161145502934232,
-      "p95_batch_latency_ms": 26.165545257390477,
-      "peak_cuda_memory_bytes": 61026816
+      "core_fps": 159.71169810310954,
+      "pipeline_fps": 94.89643588936055,
+      "mean_frame_latency_ms": 10.537803560566772,
+      "p50_batch_latency_ms": 10.055050006485544,
+      "p95_batch_latency_ms": 11.529911153775174,
+      "peak_cuda_memory_bytes": 61018112
     }
   ],
-  "source": "/home/nckusoc/volley-court-training/test-videos/clip.mp4"
+  "source": "test-videos/clip.mp4"
 }
