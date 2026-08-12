@@ -51,6 +51,7 @@ def benchmark_model(
     *,
     batch_sizes: tuple[int, ...] = (1, 4, 8, 16),
     warmup_iterations: int = 3,
+    include_layout: bool = False,
 ) -> dict[str, Any]:
     rows: list[BatchBenchmark] = []
     for batch_size in batch_sizes:
@@ -58,7 +59,7 @@ def benchmark_model(
             raise ValueError("batch sizes must be positive")
         warmup_frames = frames[: min(batch_size, len(frames))]
         for _ in range(warmup_iterations):
-            model.predict_many(warmup_frames, include_layout=False)
+            model.predict_many(warmup_frames, include_layout=include_layout)
         if model.device.type == "cuda":
             torch.cuda.synchronize(model.device)
             torch.cuda.reset_peak_memory_stats(model.device)
@@ -69,7 +70,7 @@ def benchmark_model(
         for offset in range(0, len(frames), batch_size):
             batch = frames[offset : offset + batch_size]
             batch_started = time.perf_counter()
-            results = model.predict_many(batch, include_layout=False)
+            results = model.predict_many(batch, include_layout=include_layout)
             if model.device.type == "cuda":
                 torch.cuda.synchronize(model.device)
             batch_latencies.append(time.perf_counter() - batch_started)
@@ -109,6 +110,10 @@ def benchmark_model(
         "estimated_gflops_640": 9.16,
         "image_size": model.config.image_size,
         "half": model.config.half,
+        "fused": model.config.fuse,
         "decoder": model.config.decoder,
+        "include_layout": include_layout,
+        "anchor_ransac_max_iters": model.config.anchor_ransac_max_iters,
+        "anchor_solver": model.config.anchor_solver,
         "results": [asdict(row) for row in rows],
     }
