@@ -1,20 +1,93 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 from ultralytics import YOLO
-from ultralytics.nn.modules import C3k2, Conv
+from ultralytics.nn.modules import C3k2, Conv, Conv2, ConvTranspose, DWConv, RepConv, RepVGGDW
+from ultralytics.utils.torch_utils import fuse_conv_and_bn, fuse_deconv_and_bn
 
 FEATURE_LAST_INDEX = 16
 P2_INDEX = 2
 DEEP_P3_INDEX = 16
 DEFAULT_OUTPUT_CHANNELS = 6
 DEFAULT_POSE_ARCHITECTURE = "yolo26n-pose.yaml"
+DIRECT_LAYOUT_HEAD_VERSION = 5
+
+
+@dataclass(frozen=True)
+class DirectLayoutOutput:
+    heatmap_logits: torch.Tensor
+    offset_logits: torch.Tensor
+    point_visibility_logits: torch.Tensor
+    validity_logits: torch.Tensor
+    orientation_logits: torch.Tensor
+
+
+class DirectLayoutHead(nn.Module):
+    """Stride-4 Pose36 anchor head used to solve a complete court homography."""
+
+    keypoint_count = 36
+
+    def __init__(
+        self,
+        input_channels: int,
+        proposals: int = 4,
+        hidden_channels: int = 32,
+    ) -> None:
+        super().__init__()
+        if proposals < 1:
+            raise ValueError("direct layout head requires at least one proposal")
+        self.proposals = proposals
+        self.stem = nn.Sequential(
+            Conv(input_channels, hidden_channels, 3, 2),
+            Conv(hidden_channels, hidden_channels, 3, 2),
+            Conv(hidden_channels, hidden_channels, 3, 1),
+        )
+        self.heatmap = nn.Conv2d(hidden_channels, self.keypoint_count, 1)
+        self.offset = nn.Conv2d(hidden_channels, self.keypoint_count * 2, 1)
+        self.global_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(hidden_channels, self.keypoint_count + 1),
+        )
+        self.orientation_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d((4, 4)),
+            nn.Flatten(),
+            nn.Linear(hidden_channels * 16, 8),
+        )
+        for layer in (self.heatmap, self.offset):
+            nn.init.normal_(layer.weight, mean=0.0, std=0.001)
+            assert layer.bias is not None
+            nn.init.zeros_(layer.bias)
+        final = self.global_head[-1]
+        assert isinstance(final, nn.Linear)
+        nn.init.normal_(final.weight, mean=0.0, std=0.001)
+        assert final.bias is not None
+        nn.init.zeros_(final.bias)
+        with torch.no_grad():
+            final.bias[-1] = -2.0
+        orientation_final = self.orientation_head[-1]
+        assert isinstance(orientation_final, nn.Linear)
+        nn.init.zeros_(orientation_final.weight)
+        assert orientation_final.bias is not None
+        nn.init.zeros_(orientation_final.bias)
+
+    def forward(self, features: torch.Tensor) -> DirectLayoutOutput:
+        spatial = self.stem(features)
+        global_logits = self.global_head(spatial)
+        return DirectLayoutOutput(
+            heatmap_logits=self.heatmap(spatial),
+            offset_logits=self.offset(spatial),
+            point_visibility_logits=global_logits[:, :-1],
+            validity_logits=global_logits[:, -1],
+            orientation_logits=self.orientation_head(spatial),
+        )
 
 
 class YOLO26CourtLine(nn.Module):
@@ -29,6 +102,7 @@ class YOLO26CourtLine(nn.Module):
         deep_channels: int,
         fusion_channels: int = 64,
         output_channels: int = DEFAULT_OUTPUT_CHANNELS,
+        layout_proposals: int = 0,
     ) -> None:
         super().__init__()
         self.feature_layers = feature_layers
@@ -47,15 +121,23 @@ class YOLO26CourtLine(nn.Module):
                 f"court-line head supports five, six, eight, or fifteen channels, got {output_channels}"
             )
         self.output_channels = output_channels
+        self.layout_proposals = layout_proposals
         self.head = nn.Conv2d(fusion_channels, 5 if output_channels == 15 else output_channels, 1)
         self.context_stem = (
             Conv(fusion_channels, fusion_channels, 3, 1) if output_channels == 15 else None
         )
         self.context_head = nn.Conv2d(fusion_channels, 10, 1) if output_channels == 15 else None
+        self.layout_head = (
+            DirectLayoutHead(fusion_channels, proposals=layout_proposals)
+            if layout_proposals > 0
+            else None
+        )
         nn.init.normal_(self.head.weight, mean=0.0, std=0.001)
+        assert self.head.bias is not None
         nn.init.zeros_(self.head.bias)
         if self.context_head is not None:
             nn.init.normal_(self.context_head.weight, mean=0.0, std=0.001)
+            assert self.context_head.bias is not None
             nn.init.zeros_(self.context_head.bias)
         with torch.no_grad():
             self.head.bias[0] = -2.19
@@ -76,16 +158,45 @@ class YOLO26CourtLine(nn.Module):
             outputs.append(value)
         return outputs[P2_INDEX], outputs[DEEP_P3_INDEX]
 
-    def forward(self, image: torch.Tensor) -> torch.Tensor:
+    def forward_outputs(
+        self, image: torch.Tensor
+    ) -> tuple[torch.Tensor, DirectLayoutOutput | None]:
         p2, deep_p3 = self._feature_forward(image)
-        deep_p3 = self.deep_reduce(deep_p3)
-        deep_p3 = F.interpolate(deep_p3, size=p2.shape[-2:], mode="nearest")
-        fused = self.fusion(torch.cat((p2, deep_p3), dim=1))
+        reduced = self.deep_reduce(deep_p3)
+        reduced = F.interpolate(reduced, size=p2.shape[-2:], mode="nearest")
+        fused = self.fusion(torch.cat((p2, reduced), dim=1))
         features = self.head_stem(fused)
+        layout = self.layout_head(features) if self.layout_head is not None else None
         dense = self.head(features)
-        if self.context_head is None or self.context_stem is None:
-            return dense
-        return torch.cat((dense, self.context_head(self.context_stem(features))), dim=1)
+        if self.context_head is not None and self.context_stem is not None:
+            dense = torch.cat((dense, self.context_head(self.context_stem(features))), dim=1)
+        return dense, layout
+
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        dense, _layout = self.forward_outputs(image)
+        return dense
+
+    def fuse(self) -> YOLO26CourtLine:
+        """Fold inference-only normalization and reparameterized blocks in place."""
+
+        for module in self.modules():
+            if isinstance(module, (Conv, Conv2, DWConv)) and hasattr(module, "bn"):
+                if isinstance(module, Conv2):
+                    module.fuse_convs()
+                module.conv = fuse_conv_and_bn(module.conv, module.bn)
+                delattr(module, "bn")
+                module.forward = module.forward_fuse
+            elif isinstance(module, ConvTranspose) and hasattr(module, "bn"):
+                module.conv_transpose = fuse_deconv_and_bn(module.conv_transpose, module.bn)
+                delattr(module, "bn")
+                module.forward = module.forward_fuse
+            elif isinstance(module, RepConv):
+                module.fuse_convs()
+                module.forward = module.forward_fuse
+            elif isinstance(module, RepVGGDW):
+                module.fuse()
+                module.forward = module.forward_fuse
+        return self
 
     def freeze_feature_extractor(self, freeze: bool = True) -> None:
         for parameter in self.feature_layers.parameters():
@@ -96,9 +207,44 @@ class YOLO26CourtLine(nn.Module):
             for parameter in module.parameters():
                 parameter.requires_grad_(not freeze)
 
+    def freeze_dense_head(self, freeze: bool = True) -> None:
+        for module in (self.head, self.context_stem, self.context_head):
+            if module is None:
+                continue
+            for parameter in module.parameters():
+                parameter.requires_grad_(not freeze)
+
+    def freeze_layout_geometry(self, freeze: bool = True) -> None:
+        if self.layout_head is None:
+            return
+        for module in (
+            self.layout_head.stem,
+            self.layout_head.heatmap,
+            self.layout_head.offset,
+            self.layout_head.global_head,
+        ):
+            for parameter in module.parameters():
+                parameter.requires_grad_(not freeze)
+
+    def set_layout_geometry_eval(self) -> None:
+        if self.layout_head is None:
+            return
+        for module in (
+            self.layout_head.stem,
+            self.layout_head.heatmap,
+            self.layout_head.offset,
+            self.layout_head.global_head,
+        ):
+            module.eval()
+
     def set_shared_features_eval(self) -> None:
         for module in (self.feature_layers, self.deep_reduce, self.fusion, self.head_stem):
             module.eval()
+
+    def set_dense_head_eval(self) -> None:
+        for module in (self.head, self.context_stem, self.context_head):
+            if module is not None:
+                module.eval()
 
     def set_base_head_gradient_scale(self, scale: float) -> None:
         if not 0.0 <= scale <= 1.0:
@@ -106,7 +252,11 @@ class YOLO26CourtLine(nn.Module):
         for handle in self._head_gradient_handles:
             handle.remove()
         self._head_gradient_handles = []
-        if self.output_channels not in {8, 15} or scale == 1.0:
+        if (
+            self.output_channels not in {8, 15}
+            or scale == 1.0
+            or not self.head.weight.requires_grad
+        ):
             return
 
         def scale_base_rows(gradient: torch.Tensor) -> torch.Tensor:
@@ -116,7 +266,7 @@ class YOLO26CourtLine(nn.Module):
 
         self._head_gradient_handles = [
             self.head.weight.register_hook(scale_base_rows),
-            self.head.bias.register_hook(scale_base_rows),
+            cast(torch.Tensor, self.head.bias).register_hook(scale_base_rows),
         ]
 
 
@@ -133,6 +283,7 @@ def build_from_pose_checkpoint(
     checkpoint: str | Path,
     fusion_channels: int = 64,
     output_channels: int = DEFAULT_OUTPUT_CHANNELS,
+    layout_proposals: int = 0,
 ) -> tuple[YOLO26CourtLine, dict[str, Any]]:
     """Transfer layers 0..16 from a real Pose36 checkpoint and discard its pose branch."""
 
@@ -142,14 +293,17 @@ def build_from_pose_checkpoint(
         source = str(source_path.resolve()) if source_path.exists() else str(checkpoint)
     else:
         source = str(source_path.resolve())
-    pose = YOLO(source).model.float()
+    pose = cast(nn.Module, YOLO(source).model).float()
     if type(pose).__name__ != "PoseModel":
         raise ValueError(f"expected an Ultralytics PoseModel, got {type(pose).__name__}")
     if not architecture_only and list(getattr(pose, "kpt_shape", ())) != [36, 3]:
         raise ValueError(
             f"expected Pose36 checkpoint, got kpt_shape={getattr(pose, 'kpt_shape', None)}"
         )
-    layers = pose.model
+    layers_module = getattr(pose, "model", None)
+    if not isinstance(layers_module, (nn.Sequential, nn.ModuleList)):
+        raise ValueError("checkpoint does not expose a sequential YOLO feature graph")
+    layers = list(layers_module.children())
     if len(layers) <= FEATURE_LAST_INDEX or type(layers[DEEP_P3_INDEX]).__name__ != "C3k2":
         raise ValueError("checkpoint does not match the inspected YOLO26n Pose feature graph")
     feature_layers = nn.ModuleList(copy.deepcopy(list(layers[: FEATURE_LAST_INDEX + 1])))
@@ -159,9 +313,10 @@ def build_from_pose_checkpoint(
         deep_channels=_module_output_channels(layers[DEEP_P3_INDEX]),
         fusion_channels=fusion_channels,
         output_channels=output_channels,
+        layout_proposals=layout_proposals,
     )
 
-    source_keys = list(layers.state_dict())
+    source_keys = list(layers_module.state_dict())
     transferred_keys = [
         key for key in source_keys if int(key.split(".", 1)[0]) <= FEATURE_LAST_INDEX
     ]
@@ -185,6 +340,7 @@ def build_from_pose_checkpoint(
             if not name.startswith("feature_layers.")
         ),
         "output_channels": output_channels,
+        "layout_proposals": layout_proposals,
         "major_stages": {
             "stem": True,
             "backbone_p2": True,
@@ -202,6 +358,7 @@ def load_court_line_checkpoint(
     device: str | torch.device = "cpu",
     pose_checkpoint: str | Path | None = None,
     output_channels_override: int | None = None,
+    layout_proposals_override: int | None = None,
 ) -> tuple[YOLO26CourtLine, dict[str, Any]]:
     payload = torch.load(Path(checkpoint), map_location="cpu", weights_only=False)
     if not isinstance(payload, dict) or "model" not in payload:
@@ -233,9 +390,18 @@ def load_court_line_checkpoint(
             if output_channels_override is not None
             else int(payload.get("output_channels", DEFAULT_OUTPUT_CHANNELS))
         ),
+        layout_proposals=(
+            int(layout_proposals_override)
+            if layout_proposals_override is not None
+            else int(payload.get("layout_proposals", 0))
+        ),
     )
     source_state = payload["model"]
-    if output_channels_override is None:
+    layout_upgrade = layout_proposals_override is not None and int(
+        layout_proposals_override
+    ) != int(payload.get("layout_proposals", 0))
+    layout_version_upgrade = int(payload.get("layout_head_version", 0)) < DIRECT_LAYOUT_HEAD_VERSION
+    if output_channels_override is None and not layout_upgrade and not layout_version_upgrade:
         state = source_state
     else:
         state = model.state_dict()
@@ -252,9 +418,13 @@ def load_court_line_checkpoint(
                 expanded.append(key)
         transfer_report["checkpoint_upgrade"] = {
             "source_output_channels": int(payload.get("output_channels", DEFAULT_OUTPUT_CHANNELS)),
-            "target_output_channels": int(output_channels_override),
+            "target_output_channels": int(model.output_channels),
             "copied_key_count": len(copied),
             "expanded_keys": expanded,
+            "source_layout_proposals": int(payload.get("layout_proposals", 0)),
+            "target_layout_proposals": int(model.layout_proposals),
+            "source_layout_head_version": int(payload.get("layout_head_version", 0)),
+            "target_layout_head_version": DIRECT_LAYOUT_HEAD_VERSION,
         }
     incompatible = model.load_state_dict(state, strict=True)
     if incompatible.missing_keys or incompatible.unexpected_keys:
