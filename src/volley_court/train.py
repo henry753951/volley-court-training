@@ -74,12 +74,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--layout-coordinate-weight", type=float, default=5.0)
     parser.add_argument("--layout-validity-weight", type=float, default=1.0)
-    parser.add_argument("--layout-proposal-weight", type=float, default=0.25)
-    parser.add_argument(
-        "--layout-orientation-class-weights",
-        default=None,
-        help="Comma-separated weights for the eight court orientation classes",
-    )
     parser.add_argument("--seed", type=int, default=36)
     parser.add_argument(
         "--save-every",
@@ -237,13 +231,6 @@ def _checkpoint_payload(
 
 def main() -> int:
     args = parse_args()
-    orientation_class_weights = (
-        tuple(float(value) for value in args.layout_orientation_class_weights.split(","))
-        if args.layout_orientation_class_weights
-        else None
-    )
-    if orientation_class_weights is not None and len(orientation_class_weights) != 8:
-        raise ValueError("--layout-orientation-class-weights requires eight values")
     if not args.pose_checkpoint and not args.weights:
         raise ValueError("pass --pose-checkpoint for initial transfer or --weights for fine-tuning")
     if args.epochs < 1:
@@ -381,8 +368,6 @@ def main() -> int:
         roi_weight=args.roi_weight,
         layout_coordinate_weight=args.layout_coordinate_weight,
         layout_validity_weight=args.layout_validity_weight,
-        layout_proposal_weight=args.layout_proposal_weight,
-        layout_orientation_class_weights=orientation_class_weights,
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(

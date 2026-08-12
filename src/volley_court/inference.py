@@ -17,7 +17,6 @@ from .decode import (
 )
 from .layout import (
     CANONICAL_KEYPOINTS,
-    court_homography_orientation_candidates,
     resolve_court_homography_symmetry,
 )
 from .model import DirectLayoutOutput, YOLO26CourtLine
@@ -48,7 +47,7 @@ def _anchor_solver_passes(
 
 def decode_layout_anchors(
     prediction: DirectLayoutOutput,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Decode Pose36 anchor cells and sub-cell offsets without copying spatial maps to CPU."""
 
     batch, keypoints, grid_height, grid_width = prediction.heatmap_logits.shape
@@ -75,7 +74,6 @@ def decode_layout_anchors(
         visibility.float().cpu().numpy(),
         spatial_confidence.float().cpu().numpy(),
         validity.float().cpu().numpy(),
-        prediction.orientation_logits.softmax(dim=1).float().cpu().numpy(),
     )
 
 
@@ -248,7 +246,6 @@ def infer_prepared_frames(
                 anchor_visibility,
                 anchor_spatial_confidence,
                 direct_validity,
-                orientation_probabilities,
             ) = direct_rows
             square_points = anchor_points[batch_index] * image_size
             homogeneous_points = np.column_stack(
@@ -267,11 +264,10 @@ def infer_prepared_frames(
                 canonical = canonical[quality_order]
                 observed = observed[quality_order]
             restored_proposals: list[list[list[float]]] = []
-            proposal_orientation_indices: list[int] = []
+            proposal_symmetry_indices: list[int] = []
             inlier_counts: list[int] = []
             anchor_fit_errors: list[float | None] = []
             anchor_symmetry_index = -1
-            available: list[int] = []
             if len(canonical) >= 4 and abs(float(cv2.contourArea(cv2.convexHull(canonical)))) > 1.0:
                 for method, maximum_iterations in _anchor_solver_passes(
                     anchor_solver, anchor_ransac_max_iters
@@ -290,36 +286,22 @@ def infer_prepared_frames(
                         [[[0.0, 0.0], [0.0, 18.0], [9.0, 18.0], [9.0, 0.0]]],
                         dtype=np.float32,
                     )
-                    oriented = {
-                        orientation_index: candidate
-                        for candidate, orientation_index in court_homography_orientation_candidates(
-                            homography
-                        )
-                    }
-                    available = sorted(oriented)
-                    selected_orientation = (
-                        max(
-                            available,
-                            key=lambda index: float(orientation_probabilities[batch_index][index]),
-                        )
-                        if available
-                        else -1
-                    )
-                    resolved = (
-                        (oriented[selected_orientation], selected_orientation)
-                        if selected_orientation >= 0
-                        else resolve_court_homography_symmetry(homography)
-                    )
-                    appended = False
-                    if resolved is not None:
-                        candidate, orientation_index = resolved
-                        corners = cv2.perspectiveTransform(outer, candidate)[0]
-                        if np.isfinite(corners).all():
-                            restored_proposals.append(corners.astype(float).tolist())
-                            proposal_orientation_indices.append(orientation_index)
-                            appended = True
-                    if not appended:
+                    # Pose36 admits four topology-preserving width/length symmetries.
+                    # Resolve those deterministically from image geometry, matching
+                    # target construction.  Never apply the learned 8-way classifier:
+                    # its remaining four classes exchange the 9 m and 18 m axes and
+                    # can rotate an otherwise correct homography by 90 degrees.
+                    resolved = resolve_court_homography_symmetry(homography)
+                    if resolved is None:
                         continue
+                    candidate, symmetry_index = resolved
+                    corners = cv2.perspectiveTransform(outer, candidate)[0]
+                    if not np.isfinite(corners).all():
+                        continue
+                    restored_proposals.append(corners.astype(float).tolist())
+                    proposal_symmetry_indices.append(symmetry_index)
+                    if anchor_symmetry_index < 0:
+                        anchor_symmetry_index = symmetry_index
                     inlier_count = (
                         int(inlier_mask.sum()) if inlier_mask is not None else len(canonical)
                     )
@@ -351,7 +333,7 @@ def infer_prepared_frames(
                 {
                     "corner_proposals": restored_proposals,
                     "proposal_probabilities": [1.0] * len(restored_proposals),
-                    "proposal_orientation_indices": proposal_orientation_indices,
+                    "proposal_symmetry_indices": proposal_symmetry_indices,
                     "validity_probability": float(direct_validity[batch_index]),
                     "anchor_count": int(selected.sum()),
                     "anchor_inlier_count": inlier_counts[0] if inlier_counts else 0,
@@ -359,15 +341,6 @@ def infer_prepared_frames(
                     "anchor_fit_error": anchor_fit_errors[0] if anchor_fit_errors else None,
                     "anchor_fit_errors": anchor_fit_errors,
                     "anchor_symmetry_index": anchor_symmetry_index,
-                    "orientation_probabilities": orientation_probabilities[batch_index].tolist(),
-                    "orientation_margin": (
-                        float(
-                            np.sort(orientation_probabilities[batch_index][available])[-1]
-                            - np.sort(orientation_probabilities[batch_index][available])[-2]
-                        )
-                        if len(available) >= 2
-                        else 1.0
-                    ),
                 }
             )
         restored_heatmap = None

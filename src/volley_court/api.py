@@ -190,7 +190,7 @@ class CourtLineModel:
             probabilities = np.asarray(
                 direct_prediction["proposal_probabilities"], dtype=np.float64
             )
-            orientation_indices = direct_prediction.get("proposal_orientation_indices", [])
+            symmetry_indices = direct_prediction.get("proposal_symmetry_indices", [])
             anchor_count = int(direct_prediction.get("anchor_count", 0))
             inlier_counts = direct_prediction.get("anchor_inlier_counts", [])
             fit_errors = direct_prediction.get("anchor_fit_errors", [])
@@ -203,10 +203,9 @@ class CourtLineModel:
                     rows,
                     result.width,
                     result.height,
-                    orientation_index=int(
-                        orientation_indices[index] if index < len(orientation_indices) else 0
+                    symmetry_index=int(
+                        symmetry_indices[index] if index < len(symmetry_indices) else 0
                     ),
-                    orientation_margin=float(direct_prediction.get("orientation_margin", 1.0)),
                 )
                 inlier_count = int(inlier_counts[index] if index < len(inlier_counts) else 0)
                 candidate["anchor_count"] = anchor_count
@@ -215,7 +214,7 @@ class CourtLineModel:
                     fit_errors[index] if index < len(fit_errors) else None
                 )
                 candidate["anchor_symmetry_index"] = int(
-                    orientation_indices[index] if index < len(orientation_indices) else -1
+                    symmetry_indices[index] if index < len(symmetry_indices) else -1
                 )
                 inlier_ratio = float(inlier_count) / anchor_count if anchor_count else 0.0
                 candidate["anchor_inlier_ratio"] = inlier_ratio

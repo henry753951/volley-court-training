@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .layout import COURT_ORIENTATION_CORNER_PERMUTATIONS
 from .model import DirectLayoutOutput
 
 
@@ -22,8 +21,6 @@ class CourtLineLoss(nn.Module):
         roi_weight: float = 0.5,
         layout_coordinate_weight: float = 5.0,
         layout_validity_weight: float = 1.0,
-        layout_proposal_weight: float = 0.25,
-        layout_orientation_class_weights: Sequence[float] | None = None,
         target_mode: str = "center",
     ) -> None:
         super().__init__()
@@ -39,21 +36,7 @@ class CourtLineLoss(nn.Module):
         if target_mode not in {"center", "dense_votes", "dense_context", "dense_semantic"}:
             raise ValueError(f"unsupported target mode: {target_mode}")
         self.target_mode = target_mode
-        self.layout_weights = (
-            layout_coordinate_weight,
-            layout_validity_weight,
-            layout_proposal_weight,
-        )
-        if layout_orientation_class_weights is not None and (
-            len(layout_orientation_class_weights) != 8
-            or any(weight <= 0.0 for weight in layout_orientation_class_weights)
-        ):
-            raise ValueError("layout orientation class weights must contain eight positive values")
-        self.layout_orientation_class_weights = (
-            tuple(float(weight) for weight in layout_orientation_class_weights)
-            if layout_orientation_class_weights is not None
-            else None
-        )
+        self.layout_weights = (layout_coordinate_weight, layout_validity_weight)
 
     @staticmethod
     def _center_focal(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -142,7 +125,6 @@ class CourtLineLoss(nn.Module):
             roi = prediction.new_zeros(())
         layout_coordinate = prediction.new_zeros(())
         layout_validity = prediction.new_zeros(())
-        layout_proposal = prediction.new_zeros(())
         if layout_prediction is not None:
             valid = target["layout_valid"].reshape(-1)
             point_valid = target["layout_point_valid"]
@@ -187,41 +169,8 @@ class CourtLineLoss(nn.Module):
                 layout_coordinate = spatial_ce + 2.0 * (
                     offset_error * point_valid
                 ).sum() / point_valid.sum().clamp_min(1.0)
-            valid_orientation = (valid > 0.5) & (point_valid.sum(dim=1) >= 4)
-            if bool(valid_orientation.any()):
-                with torch.no_grad():
-                    flattened = heatmap.flatten(2)
-                    predicted_index = flattened.argmax(dim=2)
-                    predicted_x = predicted_index.remainder(grid_width).float() / grid_width
-                    predicted_y = (
-                        predicted_index.div(grid_width, rounding_mode="floor").float() / grid_height
-                    )
-                    predicted_points = torch.stack((predicted_x, predicted_y), dim=2)
-                    predicted_corners = predicted_points[:, (0, 4, 5, 9)]
-                    permutations = torch.as_tensor(
-                        COURT_ORIENTATION_CORNER_PERMUTATIONS,
-                        dtype=torch.long,
-                        device=predicted_points.device,
-                    )
-                    candidates = predicted_corners[:, permutations]
-                    target_corners = target.get("layout_corners", points[:, (0, 4, 5, 9)])
-                    corner_errors = torch.linalg.vector_norm(
-                        candidates - target_corners[:, None], dim=3
-                    ).mean(dim=2)
-                    orientation_target = corner_errors.argmin(dim=1)
-                layout_proposal = F.cross_entropy(
-                    layout_prediction.orientation_logits[valid_orientation],
-                    orientation_target[valid_orientation],
-                    weight=(
-                        layout_prediction.orientation_logits.new_tensor(
-                            self.layout_orientation_class_weights
-                        )
-                        if self.layout_orientation_class_weights is not None
-                        else None
-                    ),
-                )
         wc, wo, wr, wl, wf, wid, wi = self.weights
-        wlc, wlv, wlp = self.layout_weights
+        wlc, wlv = self.layout_weights
         total = (
             wc * center
             + wo * offset
@@ -232,7 +181,6 @@ class CourtLineLoss(nn.Module):
             + wi * roi
             + wlc * layout_coordinate
             + wlv * layout_validity
-            + wlp * layout_proposal
         )
         return total, {
             "total": total.detach(),
@@ -245,5 +193,4 @@ class CourtLineLoss(nn.Module):
             "roi": roi.detach(),
             "layout_coordinate": layout_coordinate.detach(),
             "layout_validity": layout_validity.detach(),
-            "layout_proposal": layout_proposal.detach(),
         }

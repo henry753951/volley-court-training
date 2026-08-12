@@ -470,14 +470,11 @@ def layout_from_direct_corners(
     width: int,
     height: int,
     *,
-    orientation_index: int = 0,
-    orientation_margin: float = 1.0,
+    symmetry_index: int = 0,
     minimum_validity: float = 0.5,
     minimum_matched_lines: int = 5,
     minimum_evidence_score: float = 0.5,
     minimum_semantic_alignment: float = 0.665,
-    minimum_axis_alignment: float = 0.0,
-    minimum_axis_swap_orientation_margin: float = 0.15,
 ) -> dict[str, Any]:
     """Verify a model-proposed layout against fixed-cost dense line evidence."""
 
@@ -584,25 +581,18 @@ def layout_from_direct_corners(
         + horizontal_fraction(projected[9], projected[5])
     )
     axis_alignment_score = baseline_horizontal - sideline_horizontal
-    axis_swapped = orientation_index >= 4
-    required_matched_lines = 2 if axis_swapped else minimum_matched_lines
-    required_evidence_score = 0.23 if axis_swapped else minimum_evidence_score
-
     status = "ok"
     reason = None
-    if axis_swapped and axis_alignment_score <= minimum_axis_alignment:
-        status, reason = "abstained", "direct layout court axes are reversed"
-    elif axis_swapped and orientation_margin < minimum_axis_swap_orientation_margin:
-        status, reason = "ambiguous", "direct layout axis orientation is uncertain"
-    elif matched < required_matched_lines:
+    if symmetry_index not in range(4):
+        status, reason = "abstained", "runtime court-axis swaps are not supported"
+    elif matched < minimum_matched_lines:
         status, reason = "abstained", "direct layout has insufficient line evidence"
-    elif evidence_score < required_evidence_score:
+    elif evidence_score < minimum_evidence_score:
         status, reason = "abstained", "direct layout evidence score is below threshold"
     elif disagreement > 0.05 and margin < 0.15:
         status, reason = "ambiguous", "direct layout proposals disagree"
     elif (
-        not axis_swapped
-        and semantic_alignment is not None
+        semantic_alignment is not None
         and semantic_alignment < minimum_semantic_alignment
     ):
         status, reason = "ambiguous", "semantic line identities reject the direct layout"

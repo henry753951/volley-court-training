@@ -120,6 +120,47 @@ def test_direct_layout_rejects_near_far_flip() -> None:
     assert "orientation" in result["reason"]
 
 
+def test_direct_layout_rejects_runtime_axis_swap_even_with_strong_evidence() -> None:
+    rows, homography = _perspective_segments()
+    corners = cv2.perspectiveTransform(
+        np.asarray(((0.0, 0.0), (0.0, 18.0), (9.0, 18.0), (9.0, 0.0)), dtype=np.float32).reshape(
+            -1, 1, 2
+        ),
+        homography,
+    ).reshape(1, 4, 2)
+    result = layout_from_direct_corners(
+        corners,
+        np.asarray([1.0]),
+        0.99,
+        rows,
+        640,
+        640,
+        symmetry_index=4,
+    )
+    assert result["status"] == "abstained"
+    assert result["reason"] == "runtime court-axis swaps are not supported"
+
+
+def test_direct_layout_accepts_topology_preserving_runtime_symmetry() -> None:
+    rows, homography = _perspective_segments()
+    corners = cv2.perspectiveTransform(
+        np.asarray(((0.0, 0.0), (0.0, 18.0), (9.0, 18.0), (9.0, 0.0)), dtype=np.float32).reshape(
+            -1, 1, 2
+        ),
+        homography,
+    ).reshape(1, 4, 2)
+    result = layout_from_direct_corners(
+        corners,
+        np.asarray([1.0]),
+        0.99,
+        rows,
+        640,
+        640,
+        symmetry_index=3,
+    )
+    assert result["status"] == "ok"
+
+
 def test_homography_canonicalization_resolves_width_and_length_symmetry() -> None:
     _rows, homography = _perspective_segments()
     symmetry = np.asarray([[-1.0, 0.0, 9.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]], dtype=np.float64)

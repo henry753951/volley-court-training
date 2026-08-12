@@ -17,7 +17,7 @@ P2_INDEX = 2
 DEEP_P3_INDEX = 16
 DEFAULT_OUTPUT_CHANNELS = 6
 DEFAULT_POSE_ARCHITECTURE = "yolo26n-pose.yaml"
-DIRECT_LAYOUT_HEAD_VERSION = 5
+DIRECT_LAYOUT_HEAD_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,6 @@ class DirectLayoutOutput:
     offset_logits: torch.Tensor
     point_visibility_logits: torch.Tensor
     validity_logits: torch.Tensor
-    orientation_logits: torch.Tensor
 
 
 class DirectLayoutHead(nn.Module):
@@ -56,11 +55,6 @@ class DirectLayoutHead(nn.Module):
             nn.Flatten(),
             nn.Linear(hidden_channels, self.keypoint_count + 1),
         )
-        self.orientation_head = nn.Sequential(
-            nn.AdaptiveAvgPool2d((4, 4)),
-            nn.Flatten(),
-            nn.Linear(hidden_channels * 16, 8),
-        )
         for layer in (self.heatmap, self.offset):
             nn.init.normal_(layer.weight, mean=0.0, std=0.001)
             assert layer.bias is not None
@@ -72,11 +66,6 @@ class DirectLayoutHead(nn.Module):
         nn.init.zeros_(final.bias)
         with torch.no_grad():
             final.bias[-1] = -2.0
-        orientation_final = self.orientation_head[-1]
-        assert isinstance(orientation_final, nn.Linear)
-        nn.init.zeros_(orientation_final.weight)
-        assert orientation_final.bias is not None
-        nn.init.zeros_(orientation_final.bias)
 
     def forward(self, features: torch.Tensor) -> DirectLayoutOutput:
         spatial = self.stem(features)
@@ -86,7 +75,6 @@ class DirectLayoutHead(nn.Module):
             offset_logits=self.offset(spatial),
             point_visibility_logits=global_logits[:, :-1],
             validity_logits=global_logits[:, -1],
-            orientation_logits=self.orientation_head(spatial),
         )
 
 

@@ -171,7 +171,6 @@ def test_direct_layout_head_and_loss_backpropagate() -> None:
     assert layout_prediction.offset_logits.shape == (2, 72, 40, 40)
     assert layout_prediction.point_visibility_logits.shape == (2, 36)
     assert layout_prediction.validity_logits.shape == (2,)
-    assert layout_prediction.orientation_logits.shape == (2, 8)
     target = segments_to_targets(
         [(8.0, 16.0, 56.0, 16.0)],
         64,
