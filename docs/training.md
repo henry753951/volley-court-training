@@ -7,17 +7,12 @@ uv sync --group dev
 uv run python -c "import torch; print(torch.__version__, torch.cuda.get_device_name())"
 ```
 
-The project follows the [uv PyTorch integration guide](https://docs.astral.sh/uv/guides/integration/pytorch/)
-with an explicit CUDA 12.8 wheel index. Recorded H100 runs use BF16.
+The repository follows the [official uv PyTorch integration guide](https://docs.astral.sh/uv/guides/integration/pytorch/)
+with an explicit CUDA 12.8 index in `pyproject.toml`. BF16 was used on the
+H100 NVL. RTX 5070 inference uses FP16; training parameters should be retuned before treating a
+consumer-GPU run as equivalent.
 
-## Data
-
-- synthetic: `court36-synthetic-combined-2000-camera-mode-v2`, 1,600/200/200;
-- real: `court36-unified`, 283/37/37;
-- topology: 36 identity-preserving keypoint slots and seven zero-width semantic court lines.
-
-Convert both datasets before training and inspect their previews. Width/length/both symmetry variants
-must preserve YOLO keypoint slot identity.
+## Prepare targets
 
 ```bash
 uv run volley-court-convert \
@@ -31,49 +26,74 @@ uv run volley-court-convert \
   --output .work/real-lines --stride 4 --preview-count 24
 ```
 
-## Stage design
+Inspect the generated previews before training. This is where Pose36 ordering or topology errors
+should be caught.
 
-1. Synthetic dense context teaches court geometry and camera coverage.
-2. Real adaptation corrects appearance and broadcast-domain shift.
-3. Direct Pose36 anchors learn a single-frame homography proposal.
-4. The released S6 epoch trains only the spatial orientation classifier. Geometry, shared features,
-   and dense heads remain frozen so orientation training cannot destroy the accepted layout shape.
+## Recorded v1 stages
 
-The exact released S6 command is preserved in
-[`scripts/train_direct_layout_s6_spatial_orientation.sh`](../scripts/train_direct_layout_s6_spatial_orientation.sh).
-Its essential settings are:
+The release was initialized from an internal dense-votes checkpoint. Replace `$DENSE_BASE` with
+that checkpoint to reproduce the historical lineage. For a new fine-tuning run, the published v1
+checkpoint can be passed to `--weights` instead.
+
+### S1: synthetic context
 
 ```bash
 uv run volley-court-train \
-  --data artifacts/converted-real-video-hard-v2 \
-  --weights runs/direct-layout-s2-anchor40-v8-20260812/best.pt \
-  --output runs/direct-layout-s6-spatial-orientation-v1-20260813 \
-  --epochs 60 --save-every 2 --batch 32 --workers 4 --device cuda:0 \
-  --target-mode dense_semantic --layout-proposals 1 \
-  --freeze-feature-epochs 60 --freeze-shared-epochs 60 \
-  --freeze-dense-epochs 60 --freeze-layout-geometry-epochs 60 \
-  --base-head-gradient-scale 0 --hard-negative-probability 0 --lr 0.001 \
-  --layout-coordinate-weight 0 --layout-validity-weight 0 \
-  --layout-proposal-weight 1 \
-  --layout-orientation-class-weights 1.0,4.7,5.2,8.0,3.1,4.6,8.0,3.2
+  --data .work/synthetic-lines \
+  --image-root datasets/court36-synthetic-combined-2000-camera-mode-v2 \
+  --weights "$DENSE_BASE" \
+  --output runs/s1-synthetic \
+  --target-mode dense_semantic \
+  --epochs 20 --batch 64 --workers 12 --imgsz 640 --device cuda:0 \
+  --amp-dtype bf16 \
+  --freeze-feature-epochs 20 --freeze-shared-epochs 20 \
+  --base-head-gradient-scale 0 \
+  --hard-negative-probability 0.15 \
+  --family-weight 0.5 --identity-weight 0.75 --roi-weight 0.5 \
+  --weight-decay 0 --lr 0.0005 --seed 36
 ```
 
-Epoch 20 was selected. Later epochs were not preferred merely because they trained longer; the fixed
-real-test, latency, and consecutive-frame visual gates decide the release.
-
-## Evaluation and release gate
+### S2: real adaptation
 
 ```bash
-uv run volley-court-evaluate-model \
-  --dataset datasets/court36-unified/dataset.yaml \
-  --checkpoint path/to/checkpoint.pt \
-  --split test --imgsz 512 --device cuda:0 \
-  --output benchmarks/quality/candidate
-
-uv run volley-court-audit-video \
-  test-videos/clip.mp4 path/to/checkpoint.pt artifacts/audit/clip \
-  --imgsz 512 --consecutive 5 --device cuda:0
+uv run volley-court-train \
+  --data .work/real-lines \
+  --image-root datasets/court36-unified \
+  --weights runs/s1-synthetic/best.pt \
+  --output runs/s2-real \
+  --epochs 15 --batch 32 --workers 12 --imgsz 640 --device cuda:0 \
+  --amp-dtype bf16 \
+  --freeze-feature-epochs 15 --freeze-shared-epochs 15 \
+  --base-head-gradient-scale 0 \
+  --hard-negative-probability 0.20 \
+  --family-weight 0.5 --identity-weight 0.75 --roi-weight 0.5 \
+  --weight-decay 0 --lr 0.0002 --seed 36
 ```
 
-Do not release from loss curves alone. The required gates are PCK, precision, zero severe accepted
-layouts, batch-1 latency, and visual inspection of consecutive frames from all fixed videos.
+The frozen shared backbone keeps the geometry learned by the dense-vote model while S1/S2 train
+the family, identity, and court-ROI context heads. This is a short adaptation recipe, not a claim
+that 15 epochs are universally optimal.
+
+## Evaluation
+
+```bash
+uv run volley-court-evaluate \
+  --dataset datasets/court36-unified/dataset.yaml \
+  --predictions path/to/predictions \
+  --split test \
+  --output benchmarks/quality/new-run.json
+```
+
+Use line recall, family accuracy, precision, PCK, and the layout status distribution together.
+Do not gate the release solely on training loss or call line recall “keypoint accuracy.”
+
+## Extending the architecture
+
+The package keeps three seams explicit:
+
+1. `YOLO26CourtLine` owns the learned dense heads.
+2. `decode.py` turns dense tensors into typed short segments.
+3. `layout.py` performs court-topology matching and may abstain.
+
+This allows a future learned validity/context head, TensorRT export, or CUDA layout kernel without
+changing the public `CourtFrameResult` contract.

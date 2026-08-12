@@ -6,16 +6,8 @@ import numpy as np
 from volley_court.layout import (
     CANONICAL_KEYPOINTS,
     CANONICAL_LINES,
-    COURT_ORIENTATION_CORNER_PERMUTATIONS,
-    canonicalize_court_homography,
-    layout_from_direct_corners,
     match_court_layout,
 )
-
-
-def test_orientation_candidates_preserve_all_four_outer_corners() -> None:
-    assert len(COURT_ORIENTATION_CORNER_PERMUTATIONS) == 8
-    assert all(sorted(row) == [0, 1, 2, 3] for row in COURT_ORIENTATION_CORNER_PERMUTATIONS)
 
 
 def _perspective_segments() -> tuple[list[dict[str, object]], np.ndarray]:
@@ -90,42 +82,3 @@ def test_semantic_guard_rejects_identity_unsupported_layout() -> None:
     assert result["reason"] == "semantic line identities do not support the layout"
     assert result["keypoints"] == []
     assert result["candidate_keypoints"]
-
-
-def test_direct_layout_uses_fixed_order_and_dense_evidence() -> None:
-    rows, homography = _perspective_segments()
-    corners = cv2.perspectiveTransform(
-        np.asarray(((0.0, 0.0), (0.0, 18.0), (9.0, 18.0), (9.0, 0.0)), dtype=np.float32).reshape(
-            -1, 1, 2
-        ),
-        homography,
-    ).reshape(1, 4, 2)
-    result = layout_from_direct_corners(corners, np.asarray([1.0]), 0.99, rows, 640, 640)
-    assert result["status"] == "ok"
-    assert result["matched_line_count"] == 7
-    assert len(result["keypoints"]) == 36
-
-
-def test_direct_layout_rejects_near_far_flip() -> None:
-    rows, homography = _perspective_segments()
-    corners = cv2.perspectiveTransform(
-        np.asarray(((0.0, 0.0), (0.0, 18.0), (9.0, 18.0), (9.0, 0.0)), dtype=np.float32).reshape(
-            -1, 1, 2
-        ),
-        homography,
-    ).reshape(1, 4, 2)
-    corners = corners[:, [1, 0, 3, 2]]
-    result = layout_from_direct_corners(corners, np.asarray([1.0]), 0.99, rows, 640, 640)
-    assert result["status"] == "abstained"
-    assert "orientation" in result["reason"]
-
-
-def test_homography_canonicalization_resolves_width_and_length_symmetry() -> None:
-    _rows, homography = _perspective_segments()
-    symmetry = np.asarray([[-1.0, 0.0, 9.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]], dtype=np.float64)
-    canonicalized = canonicalize_court_homography(homography @ symmetry)
-    assert canonicalized is not None
-    points = np.asarray(CANONICAL_KEYPOINTS, dtype=np.float32).reshape(-1, 1, 2)
-    expected = cv2.perspectiveTransform(points, homography)
-    actual = cv2.perspectiveTransform(points, canonicalized)
-    np.testing.assert_allclose(actual, expected, atol=1e-4)

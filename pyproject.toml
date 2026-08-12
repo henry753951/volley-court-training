@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "volley-court-lines"
-version = "0.2.0"
-description = "Fast typed volleyball court layout inference, visualization, and training"
+version = "0.1.0"
+description = "Fast typed volleyball court-line inference, visualization, and training"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 authors = [{ name = "HSULab" }]
@@ -35,8 +35,6 @@ Documentation = "https://github.com/henry753951/volley-court-training#readme"
 volley-court = "volley_court.cli:main"
 volley-court-convert = "volley_court.convert_dataset:main"
 volley-court-evaluate = "volley_court.evaluate_layout:main"
-volley-court-evaluate-model = "volley_court.evaluate_model:main"
-volley-court-audit-video = "volley_court.audit_video:main"
 volley-court-train = "volley_court.train:main"
 
 [dependency-groups]

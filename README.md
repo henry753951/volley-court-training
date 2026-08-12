@@ -1,33 +1,34 @@
 # Volley Court Lines
 
-Fast, typed volleyball-court layout inference built on a compact YOLO26n backbone. One unified
-network predicts the 36 identity-bearing court anchors, layout observability, and eight canonical
-orientation classes while retaining dense zero-width line evidence as a rejection signal. An
-accepted single-frame result directly contains the homography and all 36 projected keypoints.
+Fast, typed volleyball court-line inference and layout recovery built on a compact YOLO26n
+backbone. The package detects dense zero-width court-line segments, classifies their direction
+and semantic identity, then optionally reconstructs the original 36 court keypoints.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB)](https://www.python.org/)
 [![uv](https://img.shields.io/badge/package-uv-DE5FE9)](https://docs.astral.sh/uv/)
 [![typed](https://img.shields.io/badge/typing-py.typed-2F80ED)](src/volley_court/py.typed)
 
-[![Direct-layout demo](docs/assets/direct-layout-v2-preview.jpg)](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2-final.mp4)
+[![Court-line demo](https://assets.hsulab.net/demos/volley-court-lines/v1/demo-07s.jpg)](https://assets.hsulab.net/demos/volley-court-lines/v1/clip-volley-court-lines-v1.mp4)
 
-**[Play the 14.8 s H.264 demo](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2-final.mp4)**
-— generated locally from every source frame of `test-videos/clip.mp4` through the public module.
+**[Play the 14.8 s H.264 demo](https://assets.hsulab.net/demos/volley-court-lines/v1/clip-volley-court-lines-v1.mp4)**
+— generated locally from `test-videos/clip.mp4` through the public module, including layout
+matching and the built-in visualizer.
 
-The visualizer keeps evidence and accepted geometry separate. Unresolved frames do not receive a
-connected court; an accepted frame shows the complete seven-line virtual court. Video mode runs
-the direct layout head on every source frame and uses the tracker only for temporal stabilization.
+The visualizer keeps raw detections and recovered geometry deliberately separate. Unresolved
+frames show only small evidence ticks; an accepted layout shows the complete seven-line virtual
+court and all 36 projected points. Video mode tracks that accepted geometry on every source frame
+with optical flow, so the overlay does not lag between layout-matcher passes.
 
 ## Install
 
 The published wheel is the simplest internal installation path:
 
 ```bash
-uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.2.0/volley_court_lines-0.2.0-py3-none-any.whl"
+uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.0/volley_court_lines-0.1.0-py3-none-any.whl"
 ```
 
 ```bash
-pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.2.0/volley_court_lines-0.2.0-py3-none-any.whl"
+pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.1.0/volley_court_lines-0.1.0-py3-none-any.whl"
 ```
 
 For development:
@@ -78,35 +79,35 @@ uv run volley-court download
 uv run volley-court predict-image frame.jpg frame-court.jpg --device cuda:0
 
 uv run volley-court predict-video input.mp4 output.mp4 \
-  --device cuda:0 --imgsz 512 --batch-size 8 --layout-every 1
+  --device cuda:0 --batch-size 8 --layout-every 10
 ```
 
 Video output defaults to browser-safe H.264 High Profile, `yuv420p`, AAC audio, and MP4
-`faststart`. It requires `ffmpeg`. The `--video-codec mp4v` compatibility path is available only as
-a fallback and is not recommended for web previews.
+`faststart`. It requires `ffmpeg`. The legacy `--video-codec mp4v` path is available only as a
+fallback and is not recommended for web previews.
 
 ## Published assets
 
 | Asset | Contents | SHA-256 |
 | --- | --- | --- |
-| [v2 direct-layout checkpoint](https://assets.hsulab.net/models/volley-court-lines/v2/court-line-yolo26n-layout-v2.pt) | 1.66 M parameters, 6.61 MiB | `8fa568...a0abd` |
-| [v1 rollback checkpoint](https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt) | production rollback only | `b0392c...19e86` |
+| [v1 checkpoint](https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt) | 1.62 M parameters, 6.67 MiB | `b0392c...19e86` |
 | [Synthetic dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-synthetic-combined-2000-camera-mode-v2.tar.gz) | 2,000 Blender images | `5f8fa0...78569` |
 | [Real dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-unified.tar.gz) | 357 real images | `a40be9...12a4c` |
-| [v2 demo video](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2-final.mp4) | 1080p H.264 High/yuv420p/AAC/faststart | `72c8cc...7803` |
+| [Demo video](https://assets.hsulab.net/demos/volley-court-lines/v1/clip-volley-court-lines-v1.mp4) | 1080p H.264/AAC | `b30846...5b4be` |
 
 Full checksums and dataset structure are in [docs/datasets.md](docs/datasets.md).
 
 ## Performance snapshot
 
-The release latency rows use 512 px FP16, batch 1, and include preprocessing, model, decode,
-direct-layout verification, and result construction.
+All model tests use 640 px FP16/BF16 inference and the CUDA spatial decoder.
 
 | GPU / path | Batch | Core FPS | Pipeline FPS | Latency |
 | --- | ---: | ---: | ---: | ---: |
-| RTX 5070, direct layout | 1 | 106.24 | 73.69 | 12.93 ms p50 / 18.41 ms p95 |
-| H100 NVL, direct layout | 1 | 152.43 | 86.68 | 10.16 ms p50 / 26.17 ms p95 |
-| RTX 5070, 1080p H.264 demo | 8 | 375.28 model/decode | 57.87 end-to-end | layout inferred every frame |
+| RTX 5070, packaged benchmark | 1 | 81.05 | 62.85 | 15.32 ms p50/batch |
+| RTX 5070, packaged benchmark | 16 | 830.56 | 240.90 | 4.15 ms mean/frame |
+| H100 NVL, 2,000-frame video benchmark | 16 | 763.01 | 254.77 | 3.92 ms throughput/frame |
+| H100 NVL, overlay + MP4 | 16 | 738.58 | 112.30 | 8.90 ms throughput/frame |
+| RTX 5070, tracked 1080p H.264 demo | 8 | 301.24 | 25.34 | optical flow + layout + CPU encode |
 
 The H100 and RTX 5070 rows use different source videos and benchmark harness revisions; they are
 operational measurements, not a claim that one GPU is universally faster. See
@@ -117,23 +118,21 @@ specifications.
 
 On the 37-image real test split:
 
-- visible-keypoint PCK@1%: **51.00%**;
-- visible-keypoint precision@1%: **81.96%**;
-- visible-keypoint F1@1%: **62.87%**;
-- accepted layouts with PCK@2% below 25%: **0**;
-- layout status: 19 `ok`, 6 `ambiguous`, 12 `abstained`.
+- line-family accuracy: **81.35%** over matched lines;
+- line match recall: **90.61%**;
+- visible-keypoint PCK@1%: **48.50%**;
+- visible-keypoint precision@1%: **81.04%**;
+- layout status: 18 `ok`, 18 `ambiguous`, 1 `abstained`.
 
-Missing and abstained keypoints count against PCK recall. The conservative verifier intentionally
-prefers no connected court over a geometrically unsupported layout.
+The 90% figure is line recall, not end-to-end keypoint accuracy. The layout matcher intentionally
+abstains or marks ambiguity when the visible evidence cannot determine a unique court.
 
 ## Training design
 
-The v2 model builds on the two dense-context stages and adds the direct-layout stages:
+The released model follows two context stages after dense-vote initialization:
 
 1. **S1 synthetic:** 2,000 Blender images, 20 epochs, batch 64, BF16, frozen shared features.
-2. **S2 real:** 357 real images, appearance and layout adaptation.
-3. **S6 orientation:** spatial 4x4 orientation head, eight topology-preserving classes, balanced
-   cross-entropy, and frozen accepted geometry while orientation converges.
+2. **S2 real:** 357 real images, 15 epochs, batch 32, BF16, synthetic best as initialization.
 
 This ordering teaches court geometry and camera coverage first, then adapts appearance to real
 broadcasts without discarding the learned topology. Exact commands and the limitations of the

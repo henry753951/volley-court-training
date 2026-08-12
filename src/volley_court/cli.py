@@ -19,29 +19,13 @@ from .visualization import CourtVisualizer, VisualizationConfig
 
 
 def _model_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--model", default="v2", help="Checkpoint path or bundled model name")
+    parser.add_argument("--model", default="v1", help="Checkpoint path or bundled model name")
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--imgsz", type=int, default=512)
+    parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.25)
     parser.add_argument("--top-k", type=int, default=256)
     parser.add_argument("--decoder", choices=("auto", "spatial", "cuda"), default="auto")
     parser.add_argument("--half", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--fuse", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--anchor-ransac-max-iters", type=int, default=128)
-    parser.add_argument(
-        "--anchor-solver",
-        choices=(
-            "hybrid",
-            "ransac",
-            "rho",
-            "usac_default",
-            "usac_accurate",
-            "usac_magsac",
-            "usac_prosac",
-        ),
-        default="hybrid",
-    )
-    parser.add_argument("--minimum-anchor-inlier-ratio", type=float, default=0.4)
 
 
 def _model(args: argparse.Namespace) -> CourtLineModel:
@@ -53,18 +37,14 @@ def _model(args: argparse.Namespace) -> CourtLineModel:
             confidence=args.conf,
             top_k=args.top_k,
             half=args.half,
-            fuse=args.fuse,
             decoder=args.decoder,
-            anchor_ransac_max_iters=args.anchor_ransac_max_iters,
-            anchor_solver=args.anchor_solver,
-            minimum_anchor_inlier_ratio=args.minimum_anchor_inlier_ratio,
         ),
     )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="volley-court")
-    parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
     commands = parser.add_subparsers(dest="command", required=True)
 
     download = commands.add_parser("download", help="Download and verify the default model")
@@ -102,7 +82,6 @@ def _parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--frames", type=int, default=512)
     benchmark.add_argument("--batch-sizes", default="1,4,8,16")
     benchmark.add_argument("--warmup", type=int, default=3)
-    benchmark.add_argument("--layout", action=argparse.BooleanOptionalAction, default=True)
     benchmark.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -166,7 +145,6 @@ def _predict_video(args: argparse.Namespace) -> int:
         audio_source=args.source if args.video_codec == "web" else None,
     )
     model = _model(args)
-    direct_layout = bool(getattr(model._model, "layout_proposals", 0))
     visualizer = CourtVisualizer(
         VisualizationConfig(
             show_labels=args.labels,
@@ -186,17 +164,10 @@ def _predict_video(args: argparse.Namespace) -> int:
             frames = _read_batch(capture, args.batch_size, remaining)
             if not frames:
                 break
-            results = model.predict_many(frames, include_layout=direct_layout)
+            results = model.predict_many(frames, include_layout=False)
             for frame, result in zip(frames, results, strict=True):
                 inference_seconds += result.inference_seconds
-                if direct_layout:
-                    layout = tracker.update(
-                        result.layout,
-                        width=width,
-                        height=height,
-                        frame=frame,
-                    )
-                elif args.layout_every and frames_written % args.layout_every == 0:
+                if args.layout_every and frames_written % args.layout_every == 0:
                     result = model.attach_layout(result)
                     layout = tracker.update(result.layout, width=width, height=height, frame=frame)
                 else:
@@ -219,7 +190,7 @@ def _predict_video(args: argparse.Namespace) -> int:
         "model_decode_fps": frames_written / max(inference_seconds, 1e-9),
         "end_to_end_fps": frames_written / max(wall_seconds, 1e-9),
         "batch_size": args.batch_size,
-        "layout_every": 1 if direct_layout else args.layout_every,
+        "layout_every": args.layout_every,
         "layout_status_counts": layout_status_counts,
         "video_codec": writer.codec,
         "device": str(model.device),
@@ -241,7 +212,6 @@ def _benchmark(args: argparse.Namespace) -> int:
         frames,
         batch_sizes=batch_sizes,
         warmup_iterations=args.warmup,
-        include_layout=args.layout,
     )
     report["source"] = str(args.source.resolve())
     args.output.parent.mkdir(parents=True, exist_ok=True)
