@@ -26,8 +26,7 @@ Blender World background. Its panorama loading, rotation and strength logic is
 isolated in `volleyball_synthetic/sky_sphere.py`. When this profile is active,
 all generated 3D arena shells, spectators and advertising LED boards are
 hidden; only the panorama supplies the distant arena and audience. Its normal
-weighted profile remains zero so the legacy generator is unchanged; the
-combined runner schedules it explicitly and exactly.
+weighted profile remains zero; the combined runner schedules it explicitly and exactly.
 
 Camera position, focal length, sensor width and principal-point shift vary per
 image. A championship-main mode is strongly weighted toward the centered-net,

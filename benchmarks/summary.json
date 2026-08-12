@@ -1,33 +1,38 @@
 {
-  "schema": "volley-court-lines-release-summary-v1",
+  "schema": "volley-court-lines-release-summary-v2",
   "model": {
-    "name": "court-line-yolo26n-v3",
-    "bytes": 6987346,
+    "name": "court-line-yolo26n-semantic-v4",
+    "bytes": 6703451,
     "parameters": 1622671,
     "estimated_gflops_640": 9.16,
-    "sha256": "b0392c221978c87405f2646f41f14c1b66d4e7940d07c4a19c170b8321119e86"
+    "sha256": "b4aed936446e262518c927bf17dcf04877c7ba0f96e0db7687e84c3b2ea12b2b"
   },
   "rtx5070": {
-    "batch_1_pipeline_fps": 62.84553151386561,
-    "batch_1_p50_latency_ms": 15.317000012146309,
-    "batch_16_core_fps": 830.5620892632992,
-    "batch_16_pipeline_fps": 240.89643208300745,
-    "demo_model_decode_fps": 301.2357857267925,
-    "demo_end_to_end_fps": 25.343652400855763,
-    "demo_layout_every": 10
+    "batch_1_pipeline_fps": 48.06949617370646,
+    "batch_1_p50_latency_ms": 20.172999997157604,
+    "batch_16_core_fps": 569.1141316040319,
+    "batch_16_pipeline_fps": 188.54107724589696,
+    "demo_model_decode_fps": 256.848014056024,
+    "demo_end_to_end_fps": 41.72974612666601,
+    "demo_layout_every": 1
   },
   "h100_nvl": {
-    "batch_16_core_fps": 763.0147585667637,
-    "batch_16_pipeline_fps": 254.77339684821482,
-    "batch_16_overlay_mp4_fps": 112.30006019162407
+    "batch_1_pipeline_fps": 81.53074954281642,
+    "batch_1_p50_latency_ms": 10.357171500800177,
+    "batch_16_core_fps": 1302.2464183527863,
+    "batch_16_pipeline_fps": 200.41233530663118
   },
   "quality": {
     "real_test_images": 37,
-    "line_family_accuracy": 0.8134715025906736,
-    "line_match_recall": 0.9061032863849765,
-    "visible_pck_at_0_01": 0.4850374064837905,
-    "visible_precision_at_0_01": 0.8104166666666667,
-    "visible_f1_at_0_01": 0.6068642745709829,
-    "layout_status": {"ok": 18, "ambiguous": 18, "abstained": 1}
+    "line_family_accuracy": 0.9583333333333334,
+    "line_match_recall": 0.7887323943661971,
+    "visible_pck_at_0_01": 0.2805486284289277,
+    "visible_precision_at_0_01": 0.7978723404255319,
+    "visible_f1_at_0_01": 0.4151291512915129,
+    "layout_status": {
+      "ok": 8,
+      "abstained": 29
+    },
+    "solver_p99_ms": 2.331899190000001
   }
 }

@@ -1,0 +1,63 @@
+{
+  "schema": "volley-court-lines-benchmark-v1",
+  "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "torch": "2.11.0+cu128",
+  "torch_cuda": "12.8",
+  "device": "cuda:0",
+  "gpu": "NVIDIA H100 NVL",
+  "checkpoint": "/mnt/hsulab-assets/models/volley-court-lines/v2/court-line-yolo26n-semantic-v4.pt",
+  "checkpoint_bytes": 6703451,
+  "parameters": 1622671,
+  "estimated_gflops_640": 9.16,
+  "image_size": 640,
+  "half": true,
+  "decoder": "auto",
+  "results": [
+    {
+      "batch_size": 1,
+      "frames": 512,
+      "batches": 512,
+      "core_fps": 135.97683934624936,
+      "pipeline_fps": 81.53074954281642,
+      "mean_frame_latency_ms": 12.265311009741708,
+      "p50_batch_latency_ms": 10.357171500800177,
+      "p95_batch_latency_ms": 27.309788565617055,
+      "peak_cuda_memory_bytes": 69716480
+    },
+    {
+      "batch_size": 4,
+      "frames": 512,
+      "batches": 128,
+      "core_fps": 463.7429892881825,
+      "pipeline_fps": 176.17035905037508,
+      "mean_frame_latency_ms": 5.676323789032267,
+      "p50_batch_latency_ms": 21.553639497142285,
+      "p95_batch_latency_ms": 24.22476525825914,
+      "peak_cuda_memory_bytes": 165792256
+    },
+    {
+      "batch_size": 8,
+      "frames": 512,
+      "batches": 64,
+      "core_fps": 822.8039101005611,
+      "pipeline_fps": 183.4954373733235,
+      "mean_frame_latency_ms": 5.449726785116127,
+      "p50_batch_latency_ms": 41.32890149776358,
+      "p95_batch_latency_ms": 46.628649639023934,
+      "peak_cuda_memory_bytes": 296208896
+    },
+    {
+      "batch_size": 16,
+      "frames": 512,
+      "batches": 32,
+      "core_fps": 1302.2464183527863,
+      "pipeline_fps": 200.41233530663118,
+      "mean_frame_latency_ms": 4.989712826159121,
+      "p50_batch_latency_ms": 77.96476750809234,
+      "p95_batch_latency_ms": 85.29727365239523,
+      "peak_cuda_memory_bytes": 550750720
+    }
+  ],
+  "source": "/tmp/volley-court-benchmark-clip.mp4"
+}
