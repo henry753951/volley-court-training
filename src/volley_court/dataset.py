@@ -14,7 +14,7 @@ import torch
 from torch.utils.data import Dataset
 
 from .geometry import PointSample, clip_segment_to_image, parse_yolo_pose_line
-from .layout import CANONICAL_KEYPOINTS
+from .layout import CANONICAL_KEYPOINTS, POSE36_SYMMETRY_MAPS
 
 LAYOUT_CORNER_IDS = (0, 4, 5, 9)
 LAYOUT_SYMMETRY_PERMUTATIONS = (
@@ -23,23 +23,6 @@ LAYOUT_SYMMETRY_PERMUTATIONS = (
     (1, 0, 3, 2),
     (2, 3, 0, 1),
 )
-
-
-def _pose36_symmetry_maps() -> tuple[tuple[int, ...], ...]:
-    coordinate_to_index = {
-        coordinate: index for index, coordinate in enumerate(CANONICAL_KEYPOINTS)
-    }
-    maps = []
-    for flip_width, flip_length in ((False, False), (True, False), (False, True), (True, True)):
-        permutation = []
-        for x, y in CANONICAL_KEYPOINTS:
-            transformed = (9.0 - x if flip_width else x, 18.0 - y if flip_length else y)
-            permutation.append(coordinate_to_index[transformed])
-        maps.append(tuple(permutation))
-    return tuple(maps)
-
-
-POSE36_SYMMETRY_MAPS = _pose36_symmetry_maps()
 
 
 def canonicalize_pose36_points(

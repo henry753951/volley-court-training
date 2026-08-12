@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from volley_court import CourtKeypoint, CourtLayout, CourtLayoutTracker, LayoutTrackingConfig
+from volley_court.layout import POSE36_SYMMETRY_MAPS
 
 
 def _layout(*, offset: float = 0.0, status: str = "ok") -> CourtLayout:
@@ -71,3 +74,32 @@ def test_tracker_recomputes_visibility_after_smoothing() -> None:
 
     assert tracked is not None
     assert not tracked.keypoints[0].in_frame
+
+
+def test_tracker_matches_legal_identity_flip_before_smoothing() -> None:
+    tracker = CourtLayoutTracker(LayoutTrackingConfig(smoothing=1.0, max_identity_jump_ratio=0.01))
+    first = _layout()
+    tracker.update(first, width=200, height=200)
+    permutation = POSE36_SYMMETRY_MAPS[1]
+    flipped = replace(
+        first,
+        keypoints=tuple(replace(point, id=permutation[point.id]) for point in first.keypoints),
+    )
+
+    tracked = tracker.update(flipped, width=200, height=200)
+
+    assert tracked is not None
+    assert [point.id for point in tracked.keypoints] == list(range(36))
+    assert [point.x for point in tracked.keypoints] == pytest.approx(
+        [point.x for point in first.keypoints]
+    )
+
+
+def test_tracker_reacquires_large_unmatched_jump_without_interpolation() -> None:
+    tracker = CourtLayoutTracker(LayoutTrackingConfig(smoothing=0.5))
+    tracker.update(_layout(), width=200, height=200)
+
+    tracked = tracker.update(_layout(offset=100.0), width=200, height=200)
+
+    assert tracked is not None
+    assert tracked.keypoints[0].x == pytest.approx(100.0)

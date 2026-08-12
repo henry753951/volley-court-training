@@ -8,6 +8,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+from numpy.typing import NDArray
 
 from .geometry import clip_segment_to_image
 
@@ -54,6 +55,30 @@ CANONICAL_KEYPOINTS: tuple[tuple[float, float], ...] = (
     (3.0, 12.0),
     (6.0, 12.0),
 )
+
+COURT_SYMMETRY_TRANSFORMS: tuple[NDArray[np.float64], ...] = (
+    np.eye(3, dtype=np.float64),
+    np.asarray([[-1.0, 0.0, 9.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+    np.asarray([[1.0, 0.0, 0.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]]),
+    np.asarray([[-1.0, 0.0, 9.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]]),
+)
+
+
+def _pose36_symmetry_maps() -> tuple[tuple[int, ...], ...]:
+    coordinate_to_index = {
+        coordinate: index for index, coordinate in enumerate(CANONICAL_KEYPOINTS)
+    }
+    maps = []
+    for transform in COURT_SYMMETRY_TRANSFORMS:
+        permutation = []
+        for x, y in CANONICAL_KEYPOINTS:
+            transformed = transform @ np.asarray((x, y, 1.0), dtype=np.float64)
+            permutation.append(coordinate_to_index[(float(transformed[0]), float(transformed[1]))])
+        maps.append(tuple(permutation))
+    return tuple(maps)
+
+
+POSE36_SYMMETRY_MAPS = _pose36_symmetry_maps()
 
 
 def _court_orientation_corner_permutations() -> tuple[tuple[int, ...], ...]:
@@ -408,14 +433,8 @@ def resolve_court_homography_symmetry(
 ) -> tuple[np.ndarray, int] | None:
     """Resolve the four legal court symmetries to the fixed image-facing convention."""
 
-    symmetries = (
-        np.eye(3, dtype=np.float64),
-        np.asarray([[-1.0, 0.0, 9.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
-        np.asarray([[1.0, 0.0, 0.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]]),
-        np.asarray([[-1.0, 0.0, 9.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]]),
-    )
     ranked: list[tuple[float, int, np.ndarray]] = []
-    for symmetry_index, symmetry in enumerate(symmetries):
+    for symmetry_index, symmetry in enumerate(COURT_SYMMETRY_TRANSFORMS):
         candidate = np.asarray(homography, dtype=np.float64) @ symmetry
         corners = _project_points(candidate, ((0.0, 0.0), (9.0, 0.0), (0.0, 18.0), (9.0, 18.0)))
         if corners is None:
@@ -591,10 +610,7 @@ def layout_from_direct_corners(
         status, reason = "abstained", "direct layout evidence score is below threshold"
     elif disagreement > 0.05 and margin < 0.15:
         status, reason = "ambiguous", "direct layout proposals disagree"
-    elif (
-        semantic_alignment is not None
-        and semantic_alignment < minimum_semantic_alignment
-    ):
+    elif semantic_alignment is not None and semantic_alignment < minimum_semantic_alignment:
         status, reason = "ambiguous", "semantic line identities reject the direct layout"
 
     score = float(np.clip(validity_probability * evidence_score, 0.0, 1.0))
