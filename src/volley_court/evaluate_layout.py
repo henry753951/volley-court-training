@@ -11,22 +11,12 @@ from typing import Any
 import cv2
 import numpy as np
 import yaml
-from PIL import Image, ImageFile
 
 from .geometry import PointSample, fit_line_group, parse_yolo_pose_line
-from .layout import draw_layout_overlay, match_court_layout, match_semantic_court_layout
+from .layout import draw_layout_overlay, match_court_layout
 from .topology import load_topology
 
 THRESHOLDS = (0.005, 0.01, 0.02)
-
-
-def _read_image(path: Path) -> np.ndarray:
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if image is not None:
-        return image
-    ImageFile.LOAD_TRUNCATED_IMAGES = True
-    with Image.open(path) as source:
-        return np.asarray(source.convert("RGB"))[:, :, ::-1].copy()
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,7 +28,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", choices=("train", "val", "test"), default="test")
     parser.add_argument("--minimum-keypoint-score", type=float, default=0.0)
     parser.add_argument("--minimum-hypothesis-margin", type=float, default=None)
-    parser.add_argument("--layout-solver", choices=("search", "semantic"), default="search")
     parser.add_argument("--no-overlays", action="store_true")
     return parser.parse_args()
 
@@ -72,8 +61,7 @@ def _read_label(path: Path) -> tuple[list[PointSample], tuple[float, float, floa
     values = rows[0].split()
     if len(values) < 5:
         raise ValueError(f"invalid YOLO pose label: {path}")
-    box = tuple(float(value) for value in values[1:5])
-    return parse_yolo_pose_line(rows[0]), (box[0], box[1], box[2], box[3])
+    return parse_yolo_pose_line(rows[0]), tuple(map(float, values[1:5]))
 
 
 def _segment_equation(segment: Sequence[float]) -> tuple[float, float, float, float]:
@@ -267,11 +255,8 @@ def evaluate(
     split: str = "test",
     minimum_keypoint_score: float = 0.0,
     minimum_hypothesis_margin: float | None = None,
-    layout_solver: str = "search",
     write_overlays: bool = True,
 ) -> dict[str, Any]:
-    if layout_solver not in {"search", "semantic"}:
-        raise ValueError(f"unsupported layout solver: {layout_solver}")
     image_directories = _split_directories(dataset_yaml, split)
     images = sorted(
         path for directory in image_directories for path in directory.iterdir() if path.is_file()
@@ -291,18 +276,17 @@ def evaluate(
             prediction_segments = json.loads(prediction_path.read_text(encoding="utf-8")).get(
                 "segments", []
             )
-        image = _read_image(image_path)
+        image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        if image is None:
+            raise RuntimeError(f"OpenCV could not decode: {image_path}")
         height, width = image.shape[:2]
         gt, box = _read_label(_label_path(image_path))
-        if layout_solver == "semantic":
-            layout = match_semantic_court_layout(prediction_segments, width, height)
-        else:
-            layout = match_court_layout(
-                prediction_segments,
-                width,
-                height,
-                minimum_hypothesis_margin=minimum_hypothesis_margin,
-            )
+        layout = match_court_layout(
+            prediction_segments,
+            width,
+            height,
+            minimum_hypothesis_margin=minimum_hypothesis_margin,
+        )
         statuses[layout["status"]] += 1
         predicted_keypoints = layout.get("keypoints", [])
         visible = _update_keypoint_metrics(
@@ -366,7 +350,6 @@ def evaluate(
         },
         "threshold_definition": "fraction of labelled court bounding-box diagonal",
         "minimum_hypothesis_margin": minimum_hypothesis_margin,
-        "layout_solver": layout_solver,
     }
     (output / "per-image.json").write_text(json.dumps(per_image, indent=2) + "\n", encoding="utf-8")
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
@@ -383,7 +366,6 @@ def main() -> int:
         split=args.split,
         minimum_keypoint_score=args.minimum_keypoint_score,
         minimum_hypothesis_margin=args.minimum_hypothesis_margin,
-        layout_solver=args.layout_solver,
         write_overlays=not args.no_overlays,
     )
     print(json.dumps(summary, indent=2))

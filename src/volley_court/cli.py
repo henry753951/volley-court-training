@@ -44,7 +44,7 @@ def _model(args: argparse.Namespace) -> CourtLineModel:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="volley-court")
-    parser.add_argument("--version", action="version", version="%(prog)s 0.1.1")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
     commands = parser.add_subparsers(dest="command", required=True)
 
     download = commands.add_parser("download", help="Download and verify the default model")

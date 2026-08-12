@@ -12,17 +12,6 @@ from volley_court import (
     CourtVisualizer,
     VisualizationConfig,
 )
-from volley_court.api import CourtLineModel, InferenceConfig
-
-
-def test_v2_auto_decoder_uses_fixed_semantic_path() -> None:
-    model = object.__new__(CourtLineModel)
-    model.config = InferenceConfig(decoder="auto")
-    model.semantic_layout_v2 = True
-    assert model._decoder == "cuda"
-
-    model.semantic_layout_v2 = False
-    assert model._decoder == "spatial"
 
 
 def _line() -> CourtLine:

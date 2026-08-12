@@ -4,7 +4,7 @@
 
 | Item | Value |
 | --- | ---: |
-| checkpoint | 6,703,451 bytes / 6.39 MiB |
+| checkpoint | 6,987,346 bytes / 6.67 MiB |
 | parameters | 1,622,671 |
 | estimated compute at 640 px | 9.16 GFLOPs |
 | output stride | 4 |
@@ -46,24 +46,6 @@ Raw reports:
 - [`benchmarks/raw/h100-video-overlay.json`](../benchmarks/raw/h100-video-overlay.json)
 
 The reciprocal values are throughput per frame at batch 16, not single-frame request latency.
-
-## Fixed semantic layout A/B
-
-Environment: H100 NVL, 37-image `court36-unified` test split, 640 px, confidence 0.25.
-PCK includes missing output as failure; precision is conditional on emitted keypoints.
-
-| Path | PCK@1% | Precision@1% | Line recall | Family accuracy | Layout ok | Solver p99 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| semantic-v4 + ordered fixed solver | **28.05%** | **79.79%** | **78.87%** | **95.83%** | 8/37 | **2.33 ms** |
-| production v3 + topology search | 24.69% | 74.16% | 72.77% | 88.39% | 11/37 | 307.83 ms |
-
-The new path runs CUDA dense proposals, fixed O(NK) semantic sequence alignment, an observability
-gate, and an intersection-anchored homography. It does not enumerate line-layout permutations.
-The stricter gate reduces coverage by three frames while improving PCK, accepted precision, line
-recall, family accuracy, and p99 latency. Raw reports:
-
-- [`benchmarks/semantic-layout-v2-real-test.json`](../benchmarks/semantic-layout-v2-real-test.json)
-- [`benchmarks/v3-layout-baseline-real-test.json`](../benchmarks/v3-layout-baseline-real-test.json)
 
 ## Hardware context
 

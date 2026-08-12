@@ -10,7 +10,7 @@ import torch
 
 from .assets import ModelSpec, resolve_model_path
 from .inference import infer_frame, infer_frames, resolve_device
-from .layout import match_court_layout, match_semantic_court_layout
+from .layout import match_court_layout
 from .model import YOLO26CourtLine, load_court_line_checkpoint
 from .types import CourtFrameResult, CourtLayout, CourtLine, Image
 
@@ -55,13 +55,6 @@ class CourtLineModel:
             self._model.half()
         self.target_mode = str(metadata.get("target_mode", "dense_semantic"))
         self.sample_spacing = float(metadata.get("sample_spacing", 16.0))
-        self.semantic_layout_v2 = metadata.get("release") == "semantic-layout-v2"
-
-    @property
-    def _decoder(self) -> str:
-        if self.config.decoder != "auto":
-            return self.config.decoder
-        return "cuda" if self.semantic_layout_v2 else "spatial"
 
     @classmethod
     def from_pretrained(
@@ -109,7 +102,7 @@ class CourtLineModel:
             target_mode=self.target_mode,
             sample_spacing=self.sample_spacing,
             return_heatmap=return_heatmap,
-            decoder=self._decoder,
+            decoder=self.config.decoder,
         )
         result = self._result(frame, segments, seconds, heatmap)
         should_layout = self.config.include_layout if include_layout is None else include_layout
@@ -135,7 +128,7 @@ class CourtLineModel:
             target_mode=self.target_mode,
             sample_spacing=self.sample_spacing,
             return_heatmap=return_heatmap,
-            decoder=self._decoder,
+            decoder=self.config.decoder,
         )
         per_frame_seconds = seconds / len(frames)
         results = [
@@ -145,18 +138,11 @@ class CourtLineModel:
         should_layout = self.config.include_layout if include_layout is None else include_layout
         return [self.attach_layout(result) for result in results] if should_layout else results
 
-    def attach_layout(
-        self,
-        result: CourtFrameResult,
-        *,
-        prior_layout: CourtLayout | None = None,
-    ) -> CourtFrameResult:
-        matcher = match_semantic_court_layout if self.semantic_layout_v2 else match_court_layout
-        raw = matcher(
+    def attach_layout(self, result: CourtFrameResult) -> CourtFrameResult:
+        raw = match_court_layout(
             [line.to_mapping() for line in result.lines],
             result.width,
             result.height,
-            prior_homography=prior_layout.homography if prior_layout is not None else None,
         )
         return result.with_layout(CourtLayout.from_mapping(raw))
 

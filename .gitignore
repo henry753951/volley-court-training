@@ -19,7 +19,6 @@ datasets/*
 !datasets/README.md
 runs/
 image-evals/
-benchmarks/layout-semantic-*/
 logs/
 transfer/
 video-evals/*
