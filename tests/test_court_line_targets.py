@@ -187,7 +187,13 @@ def test_direct_layout_head_and_loss_backpropagate() -> None:
     batch_target["layout_point_valid"] = torch.zeros((2, 36))
     batch_target["layout_point_valid"][0, :4] = 1.0
     prediction = torch.zeros((2, 5, 16, 16), requires_grad=True)
-    loss, parts = CourtLineLoss(target_mode="dense_votes", length_weight=0.0)(
+    loss, parts = CourtLineLoss(
+        target_mode="dense_votes",
+        length_weight=0.0,
+        layout_softargmax_weight=2.0,
+        layout_visibility_positive_weight=2.0,
+        layout_validity_positive_weight=2.0,
+    )(
         prediction,
         batch_target,
         layout_prediction,
@@ -195,6 +201,7 @@ def test_direct_layout_head_and_loss_backpropagate() -> None:
     loss.backward()
     assert torch.isfinite(loss)
     assert float(parts["layout_validity"]) > 0.0
+    assert float(parts["layout_softargmax"]) > 0.0
     assert any(parameter.grad is not None for parameter in head.parameters())
 
 

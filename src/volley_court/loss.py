@@ -21,6 +21,9 @@ class CourtLineLoss(nn.Module):
         roi_weight: float = 0.5,
         layout_coordinate_weight: float = 5.0,
         layout_validity_weight: float = 1.0,
+        layout_softargmax_weight: float = 0.0,
+        layout_visibility_positive_weight: float = 1.0,
+        layout_validity_positive_weight: float = 1.0,
         target_mode: str = "center",
     ) -> None:
         super().__init__()
@@ -36,7 +39,19 @@ class CourtLineLoss(nn.Module):
         if target_mode not in {"center", "dense_votes", "dense_context", "dense_semantic"}:
             raise ValueError(f"unsupported target mode: {target_mode}")
         self.target_mode = target_mode
-        self.layout_weights = (layout_coordinate_weight, layout_validity_weight)
+        if min(
+            layout_softargmax_weight,
+            layout_visibility_positive_weight,
+            layout_validity_positive_weight,
+        ) < 0.0:
+            raise ValueError("layout loss weights must be non-negative")
+        self.layout_weights = (
+            layout_coordinate_weight,
+            layout_validity_weight,
+            layout_softargmax_weight,
+        )
+        self.layout_visibility_positive_weight = layout_visibility_positive_weight
+        self.layout_validity_positive_weight = layout_validity_positive_weight
 
     @staticmethod
     def _center_focal(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -125,6 +140,7 @@ class CourtLineLoss(nn.Module):
             roi = prediction.new_zeros(())
         layout_coordinate = prediction.new_zeros(())
         layout_validity = prediction.new_zeros(())
+        layout_softargmax = prediction.new_zeros(())
         if layout_prediction is not None:
             valid = target["layout_valid"].reshape(-1)
             point_valid = target["layout_point_valid"]
@@ -136,10 +152,13 @@ class CourtLineLoss(nn.Module):
                     f"{point_valid.shape} versus {heatmap.shape}"
                 )
             layout_validity = F.binary_cross_entropy_with_logits(
-                layout_prediction.validity_logits, valid
+                layout_prediction.validity_logits,
+                valid,
+                pos_weight=valid.new_tensor(self.layout_validity_positive_weight),
             ) + 0.5 * F.binary_cross_entropy_with_logits(
                 layout_prediction.point_visibility_logits,
                 point_valid,
+                pos_weight=point_valid.new_tensor(self.layout_visibility_positive_weight),
             )
             points = target["layout_points"]
             grid_x = (points[..., 0] * grid_width).clamp(0.0, grid_width - 1e-4)
@@ -169,8 +188,35 @@ class CourtLineLoss(nn.Module):
                 layout_coordinate = spatial_ce + 2.0 * (
                     offset_error * point_valid
                 ).sum() / point_valid.sum().clamp_min(1.0)
+                probability = flattened_heatmap.softmax(dim=2)
+                all_offsets = layout_prediction.offset_logits.reshape(
+                    batch, keypoints, 2, grid_height * grid_width
+                ).sigmoid()
+                cell_indices = torch.arange(
+                    grid_height * grid_width,
+                    device=heatmap.device,
+                    dtype=heatmap.dtype,
+                )
+                all_x = cell_indices.remainder(grid_width)[None, None, :]
+                all_y = cell_indices.div(grid_width, rounding_mode="floor")[None, None, :]
+                expected_x = (
+                    probability * (all_x + all_offsets[:, :, 0]) / grid_width
+                ).sum(dim=2)
+                expected_y = (
+                    probability * (all_y + all_offsets[:, :, 1]) / grid_height
+                ).sum(dim=2)
+                expected_points = torch.stack((expected_x, expected_y), dim=2)
+                softargmax_error = F.smooth_l1_loss(
+                    expected_points,
+                    points,
+                    reduction="none",
+                    beta=0.01,
+                ).mean(dim=2)
+                layout_softargmax = (
+                    softargmax_error * point_valid
+                ).sum() / point_valid.sum().clamp_min(1.0)
         wc, wo, wr, wl, wf, wid, wi = self.weights
-        wlc, wlv = self.layout_weights
+        wlc, wlv, wls = self.layout_weights
         total = (
             wc * center
             + wo * offset
@@ -181,6 +227,7 @@ class CourtLineLoss(nn.Module):
             + wi * roi
             + wlc * layout_coordinate
             + wlv * layout_validity
+            + wls * layout_softargmax
         )
         return total, {
             "total": total.detach(),
@@ -193,4 +240,5 @@ class CourtLineLoss(nn.Module):
             "roi": roi.detach(),
             "layout_coordinate": layout_coordinate.detach(),
             "layout_validity": layout_validity.detach(),
+            "layout_softargmax": layout_softargmax.detach(),
         }

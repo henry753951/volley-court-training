@@ -74,6 +74,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--layout-coordinate-weight", type=float, default=5.0)
     parser.add_argument("--layout-validity-weight", type=float, default=1.0)
+    parser.add_argument("--layout-softargmax-weight", type=float, default=0.0)
+    parser.add_argument("--layout-visibility-positive-weight", type=float, default=1.0)
+    parser.add_argument("--layout-validity-positive-weight", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=36)
     parser.add_argument(
         "--save-every",
@@ -137,6 +140,7 @@ def _run_epoch(
             "roi",
             "layout_coordinate",
             "layout_validity",
+            "layout_softargmax",
         )
     }
     examples = 0
@@ -367,6 +371,9 @@ def main() -> int:
         roi_weight=args.roi_weight,
         layout_coordinate_weight=args.layout_coordinate_weight,
         layout_validity_weight=args.layout_validity_weight,
+        layout_softargmax_weight=args.layout_softargmax_weight,
+        layout_visibility_positive_weight=args.layout_visibility_positive_weight,
+        layout_validity_positive_weight=args.layout_validity_positive_weight,
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -403,6 +410,7 @@ def main() -> int:
                 "roi",
                 "layout_coordinate",
                 "layout_validity",
+                "layout_softargmax",
                 "target_collisions",
                 "target_votes",
                 "hard_negative_samples",
@@ -421,6 +429,7 @@ def main() -> int:
                 "roi",
                 "layout_coordinate",
                 "layout_validity",
+                "layout_softargmax",
                 "target_collisions",
                 "target_votes",
                 "hard_negative_samples",
