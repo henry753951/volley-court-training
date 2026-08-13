@@ -1,0 +1,34 @@
+{
+  "schema": "volley-court-lines-benchmark-v1",
+  "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "torch": "2.11.0+cu128",
+  "torch_cuda": "12.8",
+  "device": "cuda:0",
+  "gpu": "NVIDIA H100 NVL",
+  "checkpoint": "/home/nckusoc/volley-court-training-v3-metric-first/runs/v3-e5-teacher-consistency-20260813/epoch-0002.pt",
+  "checkpoint_bytes": 7226080,
+  "parameters": 1659096,
+  "estimated_gflops_640": 9.16,
+  "image_size": 512,
+  "half": true,
+  "fused": true,
+  "decoder": "cuda",
+  "include_layout": true,
+  "anchor_ransac_max_iters": 128,
+  "anchor_solver": "hybrid",
+  "results": [
+    {
+      "batch_size": 1,
+      "frames": 256,
+      "batches": 256,
+      "core_fps": 155.3857294529979,
+      "pipeline_fps": 87.46061226714076,
+      "mean_frame_latency_ms": 11.43371826560724,
+      "p50_batch_latency_ms": 10.108806993230246,
+      "p95_batch_latency_ms": 26.66789999784669,
+      "peak_cuda_memory_bytes": 61018112
+    }
+  ],
+  "source": "/home/nckusoc/volley-court-training/test-videos/clip.mp4"
+}

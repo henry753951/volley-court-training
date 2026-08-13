@@ -7,12 +7,17 @@ uv sync --group dev
 uv run python -c "import torch; print(torch.__version__, torch.cuda.get_device_name())"
 ```
 
-The repository follows the [official uv PyTorch integration guide](https://docs.astral.sh/uv/guides/integration/pytorch/)
-with an explicit CUDA 12.8 index in `pyproject.toml`. BF16 was used on the
-H100 NVL. RTX 5070 inference uses FP16; training parameters should be retuned before treating a
-consumer-GPU run as equivalent.
+The project follows the [uv PyTorch integration guide](https://docs.astral.sh/uv/guides/integration/pytorch/)
+with an explicit CUDA 12.8 wheel index. Recorded H100 runs use BF16.
 
-## Prepare targets
+## Data
+
+- synthetic: `court36-synthetic-combined-2000-camera-mode-v2`, 1,600/200/200;
+- real: `court36-unified`, 283/37/37;
+- topology: 36 identity-preserving keypoint slots and seven zero-width semantic court lines.
+
+Convert both datasets before training and inspect their previews. Width/length/both symmetry variants
+must preserve YOLO keypoint slot identity.
 
 ```bash
 uv run volley-court-convert \
@@ -26,74 +31,58 @@ uv run volley-court-convert \
   --output .work/real-lines --stride 4 --preview-count 24
 ```
 
-Inspect the generated previews before training. This is where Pose36 ordering or topology errors
-should be caught.
+## Stage design
 
-## Recorded v1 stages
+1. Synthetic dense context teaches court geometry and camera coverage.
+2. Real adaptation corrects appearance and broadcast-domain shift.
+3. Direct Pose36 anchors learn a single-frame homography proposal.
+4. V2 established the direct layout and strict semantic verifier.
+5. V3 adds a global soft-argmax layout loss, low-gradient ablations, and video-teacher consistency.
+   The final checkpoint is selected by PCK, precision, severe-accept, and video gates rather than
+   total validation loss.
 
-The release was initialized from an internal dense-votes checkpoint. Replace `$DENSE_BASE` with
-that checkpoint to reproduce the historical lineage. For a new fine-tuning run, the published v1
-checkpoint can be passed to `--weights` instead.
-
-### S1: synthetic context
-
-```bash
-uv run volley-court-train \
-  --data .work/synthetic-lines \
-  --image-root datasets/court36-synthetic-combined-2000-camera-mode-v2 \
-  --weights "$DENSE_BASE" \
-  --output runs/s1-synthetic \
-  --target-mode dense_semantic \
-  --epochs 20 --batch 64 --workers 12 --imgsz 640 --device cuda:0 \
-  --amp-dtype bf16 \
-  --freeze-feature-epochs 20 --freeze-shared-epochs 20 \
-  --base-head-gradient-scale 0 \
-  --hard-negative-probability 0.15 \
-  --family-weight 0.5 --identity-weight 0.75 --roi-weight 0.5 \
-  --weight-decay 0 --lr 0.0005 --seed 36
-```
-
-### S2: real adaptation
+The supervised V3 ablation is preserved in
+[`scripts/train_v3_accuracy_ablation.sh`](../scripts/train_v3_accuracy_ablation.sh). The selected
+`joint-low-gradient/epoch-0005.pt` checkpoint is regularized with the exact release command:
 
 ```bash
 uv run volley-court-train \
-  --data .work/real-lines \
-  --image-root datasets/court36-unified \
-  --weights runs/s1-synthetic/best.pt \
-  --output runs/s2-real \
-  --epochs 15 --batch 32 --workers 12 --imgsz 640 --device cuda:0 \
-  --amp-dtype bf16 \
-  --freeze-feature-epochs 15 --freeze-shared-epochs 15 \
-  --base-head-gradient-scale 0 \
-  --hard-negative-probability 0.20 \
-  --family-weight 0.5 --identity-weight 0.75 --roi-weight 0.5 \
-  --weight-decay 0 --lr 0.0002 --seed 36
+  --data artifacts/converted-teacher-clip-v2-20260813 \
+  --weights runs/v3-accuracy-ablation-20260813/joint-low-gradient/epoch-0005.pt \
+  --output runs/v3-e5-teacher-consistency-20260813 \
+  --epochs 3 --save-every 1 --batch 32 --workers 8 --device cuda:0 \
+  --imgsz 512 --lr 0.00001 --weight-decay 0.0005 \
+  --target-mode dense_semantic --layout-proposals 1 \
+  --freeze-feature-epochs 3 --freeze-shared-epochs 3 --freeze-dense-epochs 3 \
+  --base-head-gradient-scale 0 --hard-negative-probability 0 \
+  --family-weight 0.5 --identity-weight 1.25 --roi-weight 0.5 \
+  --layout-coordinate-weight 8 --layout-validity-weight 1.5 \
+  --layout-softargmax-weight 0 --seed 36 --amp-dtype bf16
 ```
 
-The frozen shared backbone keeps the geometry learned by the dense-vote model while S1/S2 train
-the family, identity, and court-ROI context heads. This is a short adaptation recipe, not a claim
-that 15 epochs are universally optimal.
+For V3, the best supervised candidate was regularized for two epochs against 255 stable V2 layouts
+sampled every three frames from `clip.mp4`. Those predictions are consistency data, not evaluation
+ground truth. `scripts/build_video_teacher_dataset.py` records the extraction step, and
+`scripts/interpolate_layout_checkpoints.py` supports validation-gated model-soup ablations.
+The released V3 file is epoch 2 of this consistency run; epoch 3 was evaluated and rejected.
 
-## Evaluation
+Longer runs were rejected: after roughly five epochs the small real split overfit even while loss
+continued to look reasonable. The fixed real-test, latency, and consecutive-frame visual gates
+decide the release.
+
+## Evaluation and release gate
 
 ```bash
-uv run volley-court-evaluate \
+uv run volley-court-evaluate-model \
   --dataset datasets/court36-unified/dataset.yaml \
-  --predictions path/to/predictions \
-  --split test \
-  --output benchmarks/quality/new-run.json
+  --checkpoint path/to/checkpoint.pt \
+  --split test --imgsz 512 --device cuda:0 \
+  --output benchmarks/quality/candidate
+
+uv run volley-court-audit-video \
+  test-videos/clip.mp4 path/to/checkpoint.pt artifacts/audit/clip \
+  --imgsz 512 --consecutive 5 --device cuda:0
 ```
 
-Use line recall, family accuracy, precision, PCK, and the layout status distribution together.
-Do not gate the release solely on training loss or call line recall “keypoint accuracy.”
-
-## Extending the architecture
-
-The package keeps three seams explicit:
-
-1. `YOLO26CourtLine` owns the learned dense heads.
-2. `decode.py` turns dense tensors into typed short segments.
-3. `layout.py` performs court-topology matching and may abstain.
-
-This allows a future learned validity/context head, TensorRT export, or CUDA layout kernel without
-changing the public `CourtFrameResult` contract.
+Do not release from loss curves alone. The required gates are PCK, precision, zero severe accepted
+layouts, batch-1 latency, and visual inspection of consecutive frames from all fixed videos.

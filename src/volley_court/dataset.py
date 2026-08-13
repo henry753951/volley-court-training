@@ -14,6 +14,31 @@ import torch
 from torch.utils.data import Dataset
 
 from .geometry import PointSample, clip_segment_to_image, parse_yolo_pose_line
+from .layout import CANONICAL_KEYPOINTS, POSE36_SYMMETRY_MAPS
+
+LAYOUT_CORNER_IDS = (0, 4, 5, 9)
+LAYOUT_SYMMETRY_PERMUTATIONS = (
+    (0, 1, 2, 3),
+    (3, 2, 1, 0),
+    (1, 0, 3, 2),
+    (2, 3, 0, 1),
+)
+
+
+def canonicalize_pose36_points(
+    points: Sequence[PointSample], symmetry_index: int
+) -> list[PointSample]:
+    """Remap a legal Pose36 symmetry to the fixed image-facing identity convention."""
+
+    if not 0 <= symmetry_index < len(POSE36_SYMMETRY_MAPS):
+        return list(points)
+    permutation = POSE36_SYMMETRY_MAPS[symmetry_index]
+    return [
+        PointSample(permutation[point.index], point.x, point.y, point.visibility)
+        if 0 <= point.index < len(permutation)
+        else point
+        for point in points
+    ]
 
 
 @dataclass(frozen=True)
@@ -22,13 +47,17 @@ class ImageTransform:
     inverse: np.ndarray
     size: int
 
+    @property
+    def mirrored(self) -> bool:
+        return float(np.linalg.det(self.matrix[:2, :2])) < 0.0
+
     def apply_segment(self, segment: Sequence[float]) -> tuple[float, float, float, float] | None:
         points = np.asarray(
             [[segment[0], segment[1], 1.0], [segment[2], segment[3], 1.0]],
             dtype=np.float64,
         )
         transformed = (self.matrix @ points.T).T[:, :2]
-        return clip_segment_to_image(transformed.reshape(-1), self.size, self.size)
+        return clip_segment_to_image(transformed.reshape(-1).tolist(), self.size, self.size)
 
     def restore_segment(
         self,
@@ -41,7 +70,7 @@ class ImageTransform:
             dtype=np.float64,
         )
         restored = (self.inverse @ points.T).T[:, :2]
-        return clip_segment_to_image(restored.reshape(-1), width, height)
+        return clip_segment_to_image(restored.reshape(-1).tolist(), width, height)
 
     def restore_point(self, point: Sequence[float]) -> tuple[float, float]:
         value = self.inverse @ np.asarray([point[0], point[1], 1.0], dtype=np.float64)
@@ -64,6 +93,27 @@ def warp_to_square(
     rng = rng or random.Random()
     height, width = image.shape[:2]
     scale = min(size / width, size / height)
+    if not training:
+        resized_width = max(1, min(size, int(round(width * scale))))
+        resized_height = max(1, min(size, int(round(height * scale))))
+        resized = cv2.resize(
+            image,
+            (resized_width, resized_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        left = (size - resized_width) // 2
+        top = (size - resized_height) // 2
+        warped = np.full((size, size, image.shape[2]), 114, dtype=image.dtype)
+        warped[top : top + resized_height, left : left + resized_width] = resized
+        matrix = np.asarray(
+            [
+                [resized_width / width, 0.0, float(left)],
+                [0.0, resized_height / height, float(top)],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        return warped, ImageTransform(matrix=matrix, inverse=np.linalg.inv(matrix), size=size)
     if training:
         scale *= rng.uniform(0.90, 1.10)
     translate_x = 0.5 * (size - width * scale)
@@ -88,6 +138,140 @@ def warp_to_square(
     )
     transform = ImageTransform(matrix=matrix, inverse=np.linalg.inv(matrix), size=size)
     return warped, transform
+
+
+def points_to_layout_target(
+    points: Sequence[PointSample],
+    transform: ImageTransform,
+    width: int,
+    height: int,
+) -> dict[str, torch.Tensor]:
+    """Fit a supervised homography and return its four ordered outer-court corners.
+
+    Frames with insufficient two-dimensional support are deliberately labelled
+    unobservable. They train the validity head to abstain instead of inventing a
+    complete court from one isolated line or corner.
+    """
+
+    canonical = []
+    image = []
+    for point in points:
+        if (
+            point.visibility not in {1, 2}
+            or not 0.0 <= point.x <= 1.0
+            or not 0.0 <= point.y <= 1.0
+            or not 0 <= point.index < len(CANONICAL_KEYPOINTS)
+        ):
+            continue
+        court_x, court_y = CANONICAL_KEYPOINTS[point.index]
+        if transform.mirrored:
+            court_x = 9.0 - court_x
+        pixel_x, pixel_y = transform.apply_point((point.x * width, point.y * height))
+        canonical.append((court_x / 9.0, court_y / 18.0))
+        image.append((pixel_x / transform.size, pixel_y / transform.size))
+
+    invalid = {
+        "layout_corners": torch.zeros((4, 2), dtype=torch.float32),
+        "layout_valid": torch.tensor(0.0, dtype=torch.float32),
+        "layout_fit_error": torch.tensor(0.0, dtype=torch.float32),
+        "layout_symmetry": torch.tensor(-1, dtype=torch.int64),
+        "layout_points": torch.zeros((len(CANONICAL_KEYPOINTS), 2), dtype=torch.float32),
+        "layout_point_valid": torch.zeros(len(CANONICAL_KEYPOINTS), dtype=torch.float32),
+    }
+    if len(canonical) < 4:
+        return invalid
+    source = np.asarray(canonical, dtype=np.float64)
+    destination = np.asarray(image, dtype=np.float64)
+    source_hull = cv2.convexHull(source.astype(np.float32))
+    destination_hull = cv2.convexHull(destination.astype(np.float32))
+    if abs(float(cv2.contourArea(source_hull))) < 0.01:
+        return invalid
+    if abs(float(cv2.contourArea(destination_hull))) < 0.002:
+        return invalid
+    homography, _mask = cv2.findHomography(source, destination, method=0)
+    if homography is None or not np.isfinite(homography).all():
+        return invalid
+    homogeneous = np.column_stack((source, np.ones(len(source), dtype=np.float64)))
+    projected = (homography @ homogeneous.T).T
+    if np.any(np.abs(projected[:, 2]) < 1e-8):
+        return invalid
+    projected = projected[:, :2] / projected[:, 2:3]
+    fit_error = float(np.median(np.linalg.norm(projected - destination, axis=1)))
+    if not math.isfinite(fit_error) or fit_error > 0.02:
+        return invalid
+
+    corner_source = np.asarray(
+        [
+            (
+                CANONICAL_KEYPOINTS[index][0] / 9.0,
+                CANONICAL_KEYPOINTS[index][1] / 18.0,
+                1.0,
+            )
+            for index in LAYOUT_CORNER_IDS
+        ],
+        dtype=np.float64,
+    )
+    corners = (homography @ corner_source.T).T
+    if np.any(np.abs(corners[:, 2]) < 1e-8):
+        return invalid
+    corners = corners[:, :2] / corners[:, 2:3]
+    if not np.isfinite(corners).all() or float(np.max(np.abs(corners))) > 3.0:
+        return invalid
+    if abs(float(cv2.contourArea(corners.astype(np.float32)))) < 0.005:
+        return invalid
+    # Pose36 labels may use any of the four legal width/length symmetry
+    # conventions.  They describe the same visible court and must not become
+    # negative samples for the observability head.  Canonicalize only through
+    # those topology-preserving permutations, choosing the convention whose
+    # near baseline is lower in the image and whose left side stays left.
+    ordered_candidates: list[tuple[float, int, np.ndarray]] = []
+    for symmetry_index, permutation in enumerate(LAYOUT_SYMMETRY_PERMUTATIONS):
+        candidate = corners[list(permutation)]
+        near_y = float(np.mean(candidate[[0, 3], 1]))
+        far_y = float(np.mean(candidate[[1, 2], 1]))
+        left_x = float(np.mean(candidate[[0, 1], 0]))
+        right_x = float(np.mean(candidate[[2, 3], 0]))
+        if near_y <= far_y or left_x >= right_x:
+            continue
+        ordered_candidates.append(
+            ((near_y - far_y) + (right_x - left_x), symmetry_index, candidate)
+        )
+    if not ordered_candidates:
+        return invalid
+    _, symmetry_index, corners = max(ordered_candidates, key=lambda row: row[0])
+    fixed_canonical_corners = np.asarray(
+        [[0.0, 0.0], [0.0, 18.0], [9.0, 18.0], [9.0, 0.0]], dtype=np.float32
+    )
+    fixed_homography = cv2.getPerspectiveTransform(
+        fixed_canonical_corners, corners.astype(np.float32)
+    )
+    all_canonical = np.column_stack(
+        (
+            np.asarray(CANONICAL_KEYPOINTS, dtype=np.float64),
+            np.ones(len(CANONICAL_KEYPOINTS), dtype=np.float64),
+        )
+    )
+    layout_points = (fixed_homography @ all_canonical.T).T
+    if np.any(np.abs(layout_points[:, 2]) < 1e-8):
+        return invalid
+    layout_points = layout_points[:, :2] / layout_points[:, 2:3]
+    point_valid = np.logical_and.reduce(
+        (
+            np.isfinite(layout_points).all(axis=1),
+            layout_points[:, 0] >= 0.0,
+            layout_points[:, 0] < 1.0,
+            layout_points[:, 1] >= 0.0,
+            layout_points[:, 1] < 1.0,
+        )
+    )
+    return {
+        "layout_corners": torch.from_numpy(corners.astype(np.float32)),
+        "layout_valid": torch.tensor(1.0, dtype=torch.float32),
+        "layout_fit_error": torch.tensor(fit_error, dtype=torch.float32),
+        "layout_symmetry": torch.tensor(symmetry_index, dtype=torch.int64),
+        "layout_points": torch.from_numpy(layout_points.astype(np.float32)),
+        "layout_point_valid": torch.from_numpy(point_valid.astype(np.float32)),
+    }
 
 
 def _photometric(image: np.ndarray, rng: random.Random) -> np.ndarray:
@@ -410,9 +594,18 @@ class CourtLineDataset(Dataset):
             if transformed is not None:
                 segments.append(transformed)
                 families.append(0 if int(row.get("topology_index", -1)) in {0, 2} else 1)
-                identities.append(int(row.get("topology_index", 0)))
+                identity = int(row.get("topology_index", 0))
+                if transform.mirrored:
+                    identity = {0: 2, 2: 0}.get(identity, identity)
+                identities.append(identity)
         points = self._points(metadata)
         court_roi, roi_valid = self._court_roi(points, transform, image.shape[1], image.shape[0])
+        layout_target = points_to_layout_target(
+            points,
+            transform,
+            image.shape[1],
+            image.shape[0],
+        )
         is_hard_negative = False
         if (
             self.augment
@@ -427,6 +620,8 @@ class CourtLineDataset(Dataset):
                 families = []
                 identities = []
                 is_hard_negative = True
+                layout_target["layout_valid"] = torch.tensor(0.0, dtype=torch.float32)
+                layout_target["layout_point_valid"].zero_()
         if self.augment:
             warped = _photometric(warped, rng)
         rgb = cv2.cvtColor(warped, cv2.COLOR_BGR2RGB)
@@ -445,4 +640,4 @@ class CourtLineDataset(Dataset):
             roi_valid=roi_valid,
         ) | {
             "hard_negative": torch.tensor(float(is_hard_negative), dtype=torch.float32),
-        }
+        } | layout_target

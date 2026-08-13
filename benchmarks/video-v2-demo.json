@@ -1,0 +1,19 @@
+{
+  "schema": "volley-court-lines-video-v1",
+  "source": "test-videos/clip.mp4",
+  "output": "demos/volley-court-lines/v2/clip-volley-court-lines-v2-final.mp4",
+  "frames": 884,
+  "input_fps": 59.73733143969897,
+  "model_decode_fps": 393.8304938417362,
+  "end_to_end_fps": 62.74388803021164,
+  "batch_size": 8,
+  "layout_every": 1,
+  "layout_status_counts": {
+    "abstained": 115,
+    "ok": 769
+  },
+  "video_codec": "h264/yuv420p/faststart",
+  "device": "cuda:0",
+  "checkpoint": "models/volley-court-lines/v2/court-line-yolo26n-layout-v2.pt",
+  "demo_sha256": "fa7b62b6dc18fb2788e855f0a41418dd0ef7d25c18fcf3eecd66f380d5121676"
+}

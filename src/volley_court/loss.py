@@ -6,6 +6,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from .model import DirectLayoutOutput
+
 
 class CourtLineLoss(nn.Module):
     def __init__(
@@ -17,6 +19,11 @@ class CourtLineLoss(nn.Module):
         family_weight: float = 0.5,
         identity_weight: float = 0.75,
         roi_weight: float = 0.5,
+        layout_coordinate_weight: float = 5.0,
+        layout_validity_weight: float = 1.0,
+        layout_softargmax_weight: float = 0.0,
+        layout_visibility_positive_weight: float = 1.0,
+        layout_validity_positive_weight: float = 1.0,
         target_mode: str = "center",
     ) -> None:
         super().__init__()
@@ -32,6 +39,19 @@ class CourtLineLoss(nn.Module):
         if target_mode not in {"center", "dense_votes", "dense_context", "dense_semantic"}:
             raise ValueError(f"unsupported target mode: {target_mode}")
         self.target_mode = target_mode
+        if min(
+            layout_softargmax_weight,
+            layout_visibility_positive_weight,
+            layout_validity_positive_weight,
+        ) < 0.0:
+            raise ValueError("layout loss weights must be non-negative")
+        self.layout_weights = (
+            layout_coordinate_weight,
+            layout_validity_weight,
+            layout_softargmax_weight,
+        )
+        self.layout_visibility_positive_weight = layout_visibility_positive_weight
+        self.layout_validity_positive_weight = layout_validity_positive_weight
 
     @staticmethod
     def _center_focal(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -47,6 +67,7 @@ class CourtLineLoss(nn.Module):
         self,
         prediction: torch.Tensor,
         target: Mapping[str, torch.Tensor],
+        layout_prediction: DirectLayoutOutput | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         expected_channels = {
             "center": 6,
@@ -117,7 +138,85 @@ class CourtLineLoss(nn.Module):
             family = prediction.new_zeros(())
             identity = prediction.new_zeros(())
             roi = prediction.new_zeros(())
+        layout_coordinate = prediction.new_zeros(())
+        layout_validity = prediction.new_zeros(())
+        layout_softargmax = prediction.new_zeros(())
+        if layout_prediction is not None:
+            valid = target["layout_valid"].reshape(-1)
+            point_valid = target["layout_point_valid"]
+            heatmap = layout_prediction.heatmap_logits
+            batch, keypoints, grid_height, grid_width = heatmap.shape
+            if point_valid.shape != (batch, keypoints):
+                raise ValueError(
+                    "layout point target does not match anchor head: "
+                    f"{point_valid.shape} versus {heatmap.shape}"
+                )
+            layout_validity = F.binary_cross_entropy_with_logits(
+                layout_prediction.validity_logits,
+                valid,
+                pos_weight=valid.new_tensor(self.layout_validity_positive_weight),
+            ) + 0.5 * F.binary_cross_entropy_with_logits(
+                layout_prediction.point_visibility_logits,
+                point_valid,
+                pos_weight=point_valid.new_tensor(self.layout_visibility_positive_weight),
+            )
+            points = target["layout_points"]
+            grid_x = (points[..., 0] * grid_width).clamp(0.0, grid_width - 1e-4)
+            grid_y = (points[..., 1] * grid_height).clamp(0.0, grid_height - 1e-4)
+            cell_x = grid_x.floor().long()
+            cell_y = grid_y.floor().long()
+            spatial_index = cell_y * grid_width + cell_x
+            valid_points = point_valid > 0.5
+            if bool(valid_points.any()):
+                flattened_heatmap = heatmap.flatten(2)
+                spatial_ce = F.cross_entropy(
+                    flattened_heatmap[valid_points],
+                    spatial_index[valid_points],
+                )
+                offset_logits = layout_prediction.offset_logits.reshape(
+                    batch, keypoints, 2, grid_height * grid_width
+                )
+                gather_index = spatial_index[:, :, None, None].expand(-1, -1, 2, 1)
+                predicted_offset = offset_logits.gather(3, gather_index).squeeze(3).sigmoid()
+                target_offset = torch.stack((grid_x - cell_x, grid_y - cell_y), dim=2)
+                offset_error = F.smooth_l1_loss(
+                    predicted_offset,
+                    target_offset,
+                    reduction="none",
+                    beta=0.05,
+                ).mean(dim=2)
+                layout_coordinate = spatial_ce + 2.0 * (
+                    offset_error * point_valid
+                ).sum() / point_valid.sum().clamp_min(1.0)
+                probability = flattened_heatmap.softmax(dim=2)
+                all_offsets = layout_prediction.offset_logits.reshape(
+                    batch, keypoints, 2, grid_height * grid_width
+                ).sigmoid()
+                cell_indices = torch.arange(
+                    grid_height * grid_width,
+                    device=heatmap.device,
+                    dtype=heatmap.dtype,
+                )
+                all_x = cell_indices.remainder(grid_width)[None, None, :]
+                all_y = cell_indices.div(grid_width, rounding_mode="floor")[None, None, :]
+                expected_x = (
+                    probability * (all_x + all_offsets[:, :, 0]) / grid_width
+                ).sum(dim=2)
+                expected_y = (
+                    probability * (all_y + all_offsets[:, :, 1]) / grid_height
+                ).sum(dim=2)
+                expected_points = torch.stack((expected_x, expected_y), dim=2)
+                softargmax_error = F.smooth_l1_loss(
+                    expected_points,
+                    points,
+                    reduction="none",
+                    beta=0.01,
+                ).mean(dim=2)
+                layout_softargmax = (
+                    softargmax_error * point_valid
+                ).sum() / point_valid.sum().clamp_min(1.0)
         wc, wo, wr, wl, wf, wid, wi = self.weights
+        wlc, wlv, wls = self.layout_weights
         total = (
             wc * center
             + wo * offset
@@ -126,6 +225,9 @@ class CourtLineLoss(nn.Module):
             + wf * family
             + wid * identity
             + wi * roi
+            + wlc * layout_coordinate
+            + wlv * layout_validity
+            + wls * layout_softargmax
         )
         return total, {
             "total": total.detach(),
@@ -136,4 +238,7 @@ class CourtLineLoss(nn.Module):
             "family": family.detach(),
             "identity": identity.detach(),
             "roi": roi.detach(),
+            "layout_coordinate": layout_coordinate.detach(),
+            "layout_validity": layout_validity.detach(),
+            "layout_softargmax": layout_softargmax.detach(),
         }

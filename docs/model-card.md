@@ -1,92 +1,81 @@
-# Model card: court-line-yolo26n-v3
+# Model card: court-line-yolo26n-layout-v3
 
 ## Summary
 
-`court-line-yolo26n-v3` is a compact volleyball-court geometry model derived from a YOLO26n
-feature extractor. It predicts dense, zero-width line evidence rather than a semantic mask with
-an invented line thickness.
+`court-line-yolo26n-layout-v3` is a compact single-frame volleyball-court geometry model. A
+YOLO26n feature graph produces dense seven-class zero-width line evidence and a direct Pose36
+anchor layout. A fixed-cost homography projects all 36 canonical keypoints. Geometry, anchor
+consensus, and semantic evidence decide `ok`, `ambiguous`, or `abstained`; unsupported frames do
+not receive a connected court.
 
-The network emits 15 channels at stride 4:
-
-- one dense line-center confidence channel;
-- two offset channels that vote back to the zero-width centerline;
-- two orientation channels;
-- two family channels: `vertical` and `horizontal` in court topology;
-- seven semantic identity channels: left sideline, far baseline, right sideline, near baseline,
-  near attack, center, and far attack;
-- one court-ROI context channel.
-
-The CUDA/spatial decoder clusters the dense votes into short line segments. A separate geometric
-matcher can then reconstruct the original Pose36 keypoints and emits an explicit `ok`,
-`ambiguous`, or `abstained` state.
+V3 adds recall-aware layout training, low-rate video-teacher consistency, and a complete-layout
+verifier rule. The verifier may tolerate one weak semantic identity only when all seven physical
+lines match and geometric evidence is at least 0.70. Partial layouts keep the strict semantic
+threshold.
 
 ## Artifact
 
-- URL: <https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt>
-- SHA-256: `b0392c221978c87405f2646f41f14c1b66d4e7940d07c4a19c170b8321119e86`
-- size: 6,987,346 bytes (6.67 MiB)
-- parameters: 1,622,671
-- estimated compute at 640 px: 9.16 GFLOPs
-- checkpoint format: `yolo26n-court-line-v1`
-- target mode: `dense_semantic`
-- sample spacing: 16 px
-- intersection exclusion radius: 4 px
+- URL: <https://assets.hsulab.net/models/volley-court-lines/v3/court-line-yolo26n-layout-v3.pt>
+- SHA-256: `fb4abb0656d313fb5b6a3ec57d5b1531ac3b5052c14575dea10d4d06f46b71e4`
+- size: 6,864,067 bytes (6.55 MiB)
+- parameters: 1,659,096
+- recommended input: 512 px, FP16 on CUDA
+- estimated compute: 5.86 GFLOPs at 512 px
 
-## Intended use
-
-- broadcast and fixed-camera volleyball court-line detection;
-- recovery of court keypoints for projection, calibration, and overlay;
-- offline batched analysis and low-latency edge inference;
-- initialization for later court-geometry research.
-
-The model is not intended to determine whether an arbitrary image contains a valid volleyball
-court with calibrated confidence. The layout matcher is the current guardrail for incomplete or
-inconsistent evidence.
+V3 is the package default. V2 and V1 remain explicitly available as rollback models.
 
 ## Evaluation
 
-The held-out real split contains 37 images. The raw report is
-[`benchmarks/quality/court36-unified-test.json`](../benchmarks/quality/court36-unified-test.json).
+The fixed real test split contains 37 images. Missing and abstained keypoints count against recall.
+The raw report is
+[`benchmarks/quality/direct-layout-v3-real-test-img512.json`](../benchmarks/quality/direct-layout-v3-real-test-img512.json).
+V2 was rerun through the same current runtime for the comparison below.
 
-| Metric | Value |
-| --- | ---: |
-| matched line recall | 0.9061 |
-| family accuracy on matched lines | 0.8135 |
-| visible PCK@0.5% | 0.4576 |
-| visible PCK@1% | 0.4850 |
-| visible precision@1% | 0.8104 |
-| visible F1@1% | 0.6069 |
-| median visible error | 1.67 px |
-| layout `ok` / `ambiguous` / `abstained` | 18 / 18 / 1 |
+| Metric | V2 current runtime | V3 | Change |
+| --- | ---: | ---: | ---: |
+| visible PCK@0.5% | 0.4501 | 0.4414 | -0.0087 |
+| visible PCK@1% | 0.5037 | 0.5087 | +0.0050 |
+| visible precision@1% | 0.8399 | 0.8430 | +0.0031 |
+| visible F1@1% | 0.6298 | 0.6345 | +0.0048 |
+| visible PCK@2% | 0.5137 | 0.5162 | +0.0025 |
+| `ok` / `ambiguous` / `abstained` | 18 / 6 / 13 | 18 / 6 / 13 | unchanged |
+| accepted layouts with PCK@2% below 0.25 | 0 | 0 | unchanged |
+| catastrophic reprojection accepts | 0 | 0 | unchanged |
 
-PCK thresholds are fractions of the labelled court bounding-box diagonal. Missing/abstained
-keypoints count against recall. Precision answers a different question and is therefore higher.
+The gain is deliberately small. V3 improves the primary 1% operating point and preserves the
+safety gate, but the stricter 0.5% PCK regresses by 0.87 percentage points. It is not a 90%-recall
+model; the small real dataset remains the limiting factor.
 
-## Training data and lineage
+## Visual evaluation
 
-The context-v3 release was trained in two stages:
+Four fixed videos were audited at three timestamps with five consecutive source frames per sheet.
+Across 60 inspected frames there were no axis swaps, left/right flips, crossed polygons, collapsed
+layouts, or converging ray fans. Close-ups abstain. The full 884-frame demo has 769 `ok`, zero
+`ambiguous`, and 115 `abstained` tracker outputs.
 
-- synthetic S1: 1,600 train / 200 validation / 200 test Blender renders;
-- real S2: 283 train / 37 validation / 37 test annotated images.
+![Five consecutive accepted frames](assets/direct-layout-v3-five-frames.jpg)
 
-S1 was warm-started from an internal dense-votes checkpoint, and S2 from the best S1 checkpoint.
-The released history CSV files are stored next to the checkpoint on the asset share. Exact stage
-parameters are in [`docs/training.md`](training.md).
+[Play the browser-safe demo](https://assets.hsulab.net/demos/volley-court-lines/v3/clip-volley-court-lines-v3.mp4).
+It is H.264 High/yuv420p/AAC/faststart and retains all 884 source frames.
+
+## Training lineage
+
+The released checkpoint starts from V2. A supervised recall-loss sweep was gated on real
+validation/test data. The selected geometry was then regularized for two epochs against stable V2
+layouts sampled from the unlabelled `clip` video. Teacher predictions were used only as a
+consistency constraint, never as accuracy ground truth. See [training.md](training.md).
 
 ## Limitations
 
-- The real dataset is small and has limited negative-only imagery.
-- Advertising boards, floor seams, and unrelated straight lines can trigger local line evidence.
-- A single visible right angle is often geometrically underdetermined; the matcher should report
-  ambiguity instead of inventing a unique court.
-- Semantic line identity can be mirrored when camera-side evidence is insufficient.
-- Single-image layout recovery has no temporal context. Video mode provides an optional tracker
-  that smooths accepted layouts and advances all 36 points between matcher passes using optical
-  flow with RANSAC rejection and bounded state expiry.
-- The 37-image test split is too small for a narrow confidence interval.
+- The real split has only 357 images and limited negative-only imagery.
+- A single visible corner or isolated line remains underdetermined and should abstain.
+- Close-up recall is intentionally low.
+- The optional tracker stabilizes accepted video results but cannot make a rejected single frame
+  observable.
+- H100 and RTX 5070 results are operational runs on different hosts.
 
-For deployment, keep the typed layout status and do not coerce `ambiguous` or `abstained` results
-into accepted keypoints.
+Consumers must preserve layout status and must not coerce `ambiguous` or `abstained` results into
+keypoints.
 
 ## Distribution
 

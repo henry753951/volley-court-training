@@ -8,6 +8,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+from numpy.typing import NDArray
 
 from .geometry import clip_segment_to_image
 
@@ -54,6 +55,50 @@ CANONICAL_KEYPOINTS: tuple[tuple[float, float], ...] = (
     (3.0, 12.0),
     (6.0, 12.0),
 )
+
+COURT_SYMMETRY_TRANSFORMS: tuple[NDArray[np.float64], ...] = (
+    np.eye(3, dtype=np.float64),
+    np.asarray([[-1.0, 0.0, 9.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+    np.asarray([[1.0, 0.0, 0.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]]),
+    np.asarray([[-1.0, 0.0, 9.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]]),
+)
+
+
+def _pose36_symmetry_maps() -> tuple[tuple[int, ...], ...]:
+    coordinate_to_index = {
+        coordinate: index for index, coordinate in enumerate(CANONICAL_KEYPOINTS)
+    }
+    maps = []
+    for transform in COURT_SYMMETRY_TRANSFORMS:
+        permutation = []
+        for x, y in CANONICAL_KEYPOINTS:
+            transformed = transform @ np.asarray((x, y, 1.0), dtype=np.float64)
+            permutation.append(coordinate_to_index[(float(transformed[0]), float(transformed[1]))])
+        maps.append(tuple(permutation))
+    return tuple(maps)
+
+
+POSE36_SYMMETRY_MAPS = _pose36_symmetry_maps()
+
+
+def _court_orientation_corner_permutations() -> tuple[tuple[int, ...], ...]:
+    corners = ((0.0, 0.0), (0.0, 18.0), (9.0, 18.0), (9.0, 0.0))
+    coordinate_to_index = {coordinate: index for index, coordinate in enumerate(corners)}
+    flips = (
+        lambda x, y: (x, y),
+        lambda x, y: (9.0 - x, y),
+        lambda x, y: (x, 18.0 - y),
+        lambda x, y: (9.0 - x, 18.0 - y),
+    )
+    rows = [tuple(coordinate_to_index[flip(x, y)] for x, y in corners) for flip in flips]
+    rows.extend(
+        tuple(coordinate_to_index[(0.5 * flip(x, y)[1], 2.0 * flip(x, y)[0])] for x, y in corners)
+        for flip in flips
+    )
+    return tuple(rows)
+
+
+COURT_ORIENTATION_CORNER_PERMUTATIONS = _court_orientation_corner_permutations()
 
 
 @dataclass(frozen=True)
@@ -275,7 +320,7 @@ def _project_line(
     points = _project_points(homography, (line.first, line.second))
     if points is None:
         return None
-    return clip_segment_to_image(points.reshape(-1), width, height)
+    return clip_segment_to_image(points.reshape(-1).tolist(), width, height)
 
 
 def _match_projected_lines(
@@ -328,6 +373,51 @@ def _match_projected_lines(
     return rows, 0.55 * coverage + 0.45 * geometry, matched
 
 
+def _refine_homography_from_matched_lines(
+    homography: np.ndarray,
+    line_rows: Sequence[dict[str, Any]],
+    observed: Sequence[ObservedLine],
+    width: int,
+    height: int,
+) -> np.ndarray | None:
+    """Snap an anchor-solved homography to identity-matched dense line intersections."""
+
+    observed_by_index = {line.index: line for line in observed}
+    matched = {
+        int(row["topology_index"]): observed_by_index[int(row["source_index"])]
+        for row in line_rows
+        if row.get("source_index") is not None and int(row["source_index"]) in observed_by_index
+    }
+    if not {0, 2}.issubset(matched):
+        return None
+    horizontal_y = {1: 18.0, 3: 0.0, 4: 6.0, 5: 9.0, 6: 12.0}
+    source = []
+    destination = []
+    maximum_deviation = 0.08 * math.hypot(width, height)
+    for vertical_index, court_x in ((0, 0.0), (2, 9.0)):
+        for horizontal_index, court_y in horizontal_y.items():
+            if horizontal_index not in matched:
+                continue
+            point = _intersection(matched[vertical_index], matched[horizontal_index])
+            if point is None:
+                continue
+            projected = _project_points(homography, ((court_x, court_y),))
+            if projected is None or np.linalg.norm(projected[0] - point) > maximum_deviation:
+                continue
+            source.append((court_x, court_y))
+            destination.append(point)
+    if len(source) < 4:
+        return None
+    source_array = np.asarray(source, dtype=np.float32)
+    destination_array = np.asarray(destination, dtype=np.float32)
+    if abs(float(cv2.contourArea(cv2.convexHull(source_array)))) < 1.0:
+        return None
+    refined, _mask = cv2.findHomography(source_array, destination_array, method=0)
+    if refined is None or not np.isfinite(refined).all() or _court_convention_score(refined) < 1.0:
+        return None
+    return refined
+
+
 def _court_convention_score(homography: np.ndarray) -> float:
     corners = _project_points(homography, ((0.0, 0.0), (9.0, 0.0), (0.0, 18.0), (9.0, 18.0)))
     if corners is None:
@@ -336,6 +426,233 @@ def _court_convention_score(homography: np.ndarray) -> float:
     far_y = float(np.mean(corners[2:, 1]))
     near_left_x, near_right_x = float(corners[0, 0]), float(corners[1, 0])
     return float(near_y > far_y) * 0.5 + float(near_left_x < near_right_x) * 0.5
+
+
+def resolve_court_homography_symmetry(
+    homography: np.ndarray,
+) -> tuple[np.ndarray, int] | None:
+    """Resolve the four legal court symmetries to the fixed image-facing convention."""
+
+    ranked: list[tuple[float, int, np.ndarray]] = []
+    for symmetry_index, symmetry in enumerate(COURT_SYMMETRY_TRANSFORMS):
+        candidate = np.asarray(homography, dtype=np.float64) @ symmetry
+        corners = _project_points(candidate, ((0.0, 0.0), (9.0, 0.0), (0.0, 18.0), (9.0, 18.0)))
+        if corners is None:
+            continue
+        near_y = float(np.mean(corners[:2, 1]))
+        far_y = float(np.mean(corners[2:, 1]))
+        near_left_x, near_right_x = float(corners[0, 0]), float(corners[1, 0])
+        if near_y <= far_y or near_left_x >= near_right_x:
+            continue
+        ranked.append(((near_y - far_y) + (near_right_x - near_left_x), symmetry_index, candidate))
+    if not ranked:
+        return None
+    _, symmetry_index, normalized = max(ranked, key=lambda row: row[0])
+    scale = float(normalized[2, 2])
+    normalized = normalized / scale if abs(scale) > 1e-12 else normalized
+    return normalized, symmetry_index
+
+
+def court_homography_orientation_candidates(
+    homography: np.ndarray,
+) -> tuple[tuple[np.ndarray, int], ...]:
+    """Return fixed-cost D4-like axis/orientation candidates in image convention."""
+
+    flips = (
+        np.eye(3, dtype=np.float64),
+        np.asarray([[-1.0, 0.0, 9.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        np.asarray([[1.0, 0.0, 0.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]]),
+        np.asarray([[-1.0, 0.0, 9.0], [0.0, -1.0, 18.0], [0.0, 0.0, 1.0]]),
+    )
+    axis_swap = np.asarray([[0.0, 0.5, 0.0], [2.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    candidates = []
+    for index, transform in enumerate((*flips, *(axis_swap @ flip for flip in flips))):
+        candidate = np.asarray(homography, dtype=np.float64) @ transform
+        if _court_convention_score(candidate) < 1.0:
+            continue
+        scale = float(candidate[2, 2])
+        candidate = candidate / scale if abs(scale) > 1e-12 else candidate
+        candidates.append((candidate, index))
+    return tuple(candidates)
+
+
+def canonicalize_court_homography(homography: np.ndarray) -> np.ndarray | None:
+    resolved = resolve_court_homography_symmetry(homography)
+    return resolved[0] if resolved is not None else None
+
+
+def layout_from_direct_corners(
+    corner_proposals: np.ndarray,
+    proposal_probabilities: np.ndarray,
+    validity_probability: float,
+    segments: Sequence[dict[str, Any]],
+    width: int,
+    height: int,
+    *,
+    symmetry_index: int = 0,
+    minimum_validity: float = 0.5,
+    minimum_matched_lines: int = 5,
+    minimum_evidence_score: float = 0.5,
+    minimum_semantic_alignment: float = 0.665,
+) -> dict[str, Any]:
+    """Verify a model-proposed layout against fixed-cost dense line evidence."""
+
+    empty = {
+        "status": "abstained",
+        "reason": "direct layout is not observable",
+        "layout_score": 0.0,
+        "hypothesis_margin": 0.0,
+        "semantic_alignment": None,
+        "matched_line_count": 0,
+        "homography": None,
+        "lines": [],
+        "keypoints": [],
+        "candidate_keypoints": [],
+        "direct_validity": float(validity_probability),
+    }
+    proposals = np.asarray(corner_proposals, dtype=np.float64)
+    probabilities = np.asarray(proposal_probabilities, dtype=np.float64).reshape(-1)
+    if proposals.ndim != 3 or proposals.shape[1:] != (4, 2):
+        return {**empty, "reason": "invalid direct layout tensor shape"}
+    if len(probabilities) != len(proposals) or not np.isfinite(proposals).all():
+        return {**empty, "reason": "non-finite direct layout proposal"}
+    if validity_probability < minimum_validity:
+        return empty
+    best_index = int(np.argmax(probabilities))
+    corners = proposals[best_index]
+    frame_area = max(float(width * height), 1.0)
+    polygon_area = abs(float(cv2.contourArea(corners.astype(np.float32))))
+    if polygon_area / frame_area < 0.01 or not cv2.isContourConvex(corners.astype(np.float32)):
+        return {**empty, "reason": "direct layout quadrilateral is degenerate"}
+    normalized = corners / np.asarray([max(width, 1), max(height, 1)], dtype=np.float64)
+    if float(np.max(np.abs(normalized))) > 3.0:
+        return {**empty, "reason": "direct layout is implausibly far outside the image"}
+
+    canonical_corners = np.asarray(
+        [[0.0, 0.0], [0.0, 18.0], [9.0, 18.0], [9.0, 0.0]],
+        dtype=np.float32,
+    )
+    homography = cv2.getPerspectiveTransform(canonical_corners, corners.astype(np.float32))
+    if not np.isfinite(homography).all() or _court_convention_score(homography) < 1.0:
+        return {**empty, "reason": "direct layout violates the fixed court orientation"}
+
+    observed = _observed_lines(segments)
+    line_rows, evidence_score, matched = _match_projected_lines(
+        homography,
+        observed,
+        observed,
+        width,
+        height,
+    )
+    refined = _refine_homography_from_matched_lines(homography, line_rows, observed, width, height)
+    if refined is not None:
+        homography = refined
+        line_rows, evidence_score, matched = _match_projected_lines(
+            homography,
+            observed,
+            observed,
+            width,
+            height,
+        )
+    observed_by_index = {line.index: line for line in observed}
+    semantic_scores = []
+    for row in line_rows:
+        source_index = row.get("source_index")
+        if source_index is None:
+            continue
+        candidate = observed_by_index.get(int(source_index))
+        topology_index = int(row["topology_index"])
+        if candidate is not None and len(candidate.identity_probabilities) == 7:
+            semantic_scores.append(candidate.identity_probabilities[topology_index])
+    semantic_alignment = float(np.mean(semantic_scores)) if semantic_scores else None
+    semantic_threshold = minimum_semantic_alignment
+    if matched == len(CANONICAL_LINES) and evidence_score >= 0.70:
+        # A complete seven-line geometric match is much stronger evidence than
+        # one weak identity score at an occluded net/post intersection. Keep
+        # partial layouts on the strict threshold so unrelated lines cannot
+        # manufacture a connected court.
+        semantic_threshold = min(semantic_threshold, 0.55)
+
+    projected = _project_points(homography, CANONICAL_KEYPOINTS)
+    if projected is None:
+        return {**empty, "reason": "direct homography produced invalid keypoints"}
+
+    def horizontal_fraction(first: np.ndarray, second: np.ndarray) -> float:
+        delta = second - first
+        return abs(float(delta[0])) / max(float(np.linalg.norm(delta)), 1e-9)
+
+    sorted_probabilities = np.sort(probabilities)[::-1]
+    margin = float(
+        sorted_probabilities[0] - sorted_probabilities[1]
+        if len(sorted_probabilities) > 1
+        else sorted_probabilities[0]
+    )
+    disagreement = 0.0
+    if len(proposals) > 1:
+        runner_up = int(np.argsort(probabilities)[-2])
+        disagreement = float(
+            np.max(
+                np.linalg.norm(
+                    normalized - proposals[runner_up] / np.asarray([width, height]),
+                    axis=1,
+                )
+            )
+        )
+    baseline_horizontal = 0.5 * (
+        horizontal_fraction(projected[0], projected[9])
+        + horizontal_fraction(projected[4], projected[5])
+    )
+    sideline_horizontal = 0.5 * (
+        horizontal_fraction(projected[0], projected[4])
+        + horizontal_fraction(projected[9], projected[5])
+    )
+    axis_alignment_score = baseline_horizontal - sideline_horizontal
+    status = "ok"
+    reason = None
+    if symmetry_index not in range(4):
+        status, reason = "abstained", "runtime court-axis swaps are not supported"
+    elif matched < minimum_matched_lines:
+        status, reason = "abstained", "direct layout has insufficient line evidence"
+    elif evidence_score < minimum_evidence_score:
+        status, reason = "abstained", "direct layout evidence score is below threshold"
+    elif disagreement > 0.05 and margin < 0.15:
+        status, reason = "ambiguous", "direct layout proposals disagree"
+    elif semantic_alignment is not None and semantic_alignment < semantic_threshold:
+        status, reason = "ambiguous", "semantic line identities reject the direct layout"
+
+    score = float(np.clip(validity_probability * evidence_score, 0.0, 1.0))
+
+    line_scores = {int(row["topology_index"]): float(row["match_score"]) for row in line_rows}
+    keypoints = []
+    for index, point in enumerate(projected):
+        parents = KEYPOINT_PARENTS[index]
+        parent_score = sum(line_scores.get(parent, 0.0) for parent in parents) / len(parents)
+        keypoints.append(
+            {
+                "id": index,
+                "x": float(point[0]),
+                "y": float(point[1]),
+                "score": float(np.clip(score * parent_score, 0.0, 1.0)),
+                "in_frame": bool(0.0 <= point[0] < width and 0.0 <= point[1] < height),
+                "source": "direct_layout_homography",
+            }
+        )
+    return {
+        "status": status,
+        "reason": reason,
+        "layout_score": score,
+        "hypothesis_margin": margin,
+        "proposal_disagreement": disagreement,
+        "semantic_alignment": semantic_alignment,
+        "matched_line_count": int(matched),
+        "homography": homography.tolist(),
+        "lines": line_rows,
+        "keypoints": keypoints if status == "ok" else [],
+        "candidate_keypoints": keypoints,
+        "direct_validity": float(validity_probability),
+        "direct_proposal_probability": float(probabilities[best_index]),
+        "axis_alignment_score": axis_alignment_score,
+    }
 
 
 def _candidate_homographies(

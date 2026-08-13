@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
+from .layout import COURT_SYMMETRY_TRANSFORMS, POSE36_SYMMETRY_MAPS
 from .types import CourtKeypoint, CourtLayout, Image
 
 
@@ -18,6 +19,7 @@ class LayoutTrackingConfig:
 
     smoothing: float = 0.65
     fast_motion_threshold_px: float = 18.0
+    max_identity_jump_ratio: float = 0.08
     max_hold_frames: int = 25
 
     def __post_init__(self) -> None:
@@ -25,6 +27,8 @@ class LayoutTrackingConfig:
             raise ValueError("smoothing must be in (0, 1]")
         if self.fast_motion_threshold_px <= 0.0:
             raise ValueError("fast_motion_threshold_px must be positive")
+        if not 0.0 < self.max_identity_jump_ratio < 1.0:
+            raise ValueError("max_identity_jump_ratio must be in (0, 1)")
         if self.max_hold_frames < 0:
             raise ValueError("max_hold_frames cannot be negative")
 
@@ -57,6 +61,33 @@ class CourtLayoutTracker:
     ) -> CourtLayout | None:
         gray = self._gray(frame) if frame is not None else None
         if layout is not None and layout.status == "ok" and len(layout.keypoints) == 36:
+            identity_match = self._match_identity(layout, width=width, height=height)
+            if identity_match is not None:
+                symmetry_index, direct_distance, best_distance = identity_match
+                if (
+                    symmetry_index != 0
+                    and direct_distance > self.config.max_identity_jump_ratio
+                    and best_distance <= self.config.max_identity_jump_ratio
+                ):
+                    layout = self._align_identity(layout, symmetry_index)
+                elif best_distance > self.config.max_identity_jump_ratio:
+                    tracked = self._track_frame(gray, width=width, height=height)
+                    if tracked is not None:
+                        self._current = replace(
+                            tracked,
+                            reason="tracked through rejected layout discontinuity",
+                        )
+                        self._missed_frames = 0
+                        self._previous_gray = gray
+                        return self._current
+                    self._current = self._recompute_visibility(
+                        layout,
+                        width=width,
+                        height=height,
+                    )
+                    self._missed_frames = 0
+                    self._previous_gray = gray
+                    return self._current
             self._current = self._smooth(layout, width=width, height=height)
             self._missed_frames = 0
             self._previous_gray = gray
@@ -74,6 +105,96 @@ class CourtLayoutTracker:
         self.reset()
         self._previous_gray = gray
         return layout
+
+    def _match_identity(
+        self,
+        layout: CourtLayout,
+        *,
+        width: int,
+        height: int,
+    ) -> tuple[int, float, float] | None:
+        if self._current is None or len(self._current.keypoints) != 36:
+            return None
+        previous = {point.id: point for point in self._current.keypoints}
+        candidate = {point.id: point for point in layout.keypoints}
+        if len(previous) != 36 or len(candidate) != 36:
+            return None
+        diagonal = math.hypot(width, height)
+        if diagonal <= 0.0:
+            return None
+        distances = tuple(
+            median(
+                math.hypot(
+                    previous[index].x - candidate[permutation[index]].x,
+                    previous[index].y - candidate[permutation[index]].y,
+                )
+                / diagonal
+                for index in range(36)
+            )
+            for permutation in POSE36_SYMMETRY_MAPS
+        )
+        symmetry_index = min(range(len(distances)), key=distances.__getitem__)
+        return symmetry_index, distances[0], distances[symmetry_index]
+
+    @staticmethod
+    def _align_identity(layout: CourtLayout, symmetry_index: int) -> CourtLayout:
+        permutation = POSE36_SYMMETRY_MAPS[symmetry_index]
+        by_id = {point.id: point for point in layout.keypoints}
+        keypoints = tuple(
+            replace(by_id[permutation[index]], id=index, source="temporal_identity_match")
+            for index in range(36)
+        )
+        inverse = {source_id: target_id for target_id, source_id in enumerate(permutation)}
+        candidate_keypoints = tuple(
+            sorted(
+                (
+                    replace(
+                        point,
+                        id=inverse.get(point.id, point.id),
+                        source="temporal_identity_match",
+                    )
+                    for point in layout.candidate_keypoints
+                ),
+                key=lambda point: point.id,
+            )
+        )
+        homography = layout.homography
+        if homography is not None:
+            aligned = (
+                np.asarray(homography, dtype=np.float64) @ COURT_SYMMETRY_TRANSFORMS[symmetry_index]
+            )
+            scale = float(aligned[2, 2])
+            if abs(scale) > 1e-12:
+                aligned /= scale
+            homography = cast(
+                tuple[tuple[float, float, float], ...],
+                tuple(tuple(float(value) for value in row) for row in aligned),
+            )
+        return replace(
+            layout,
+            keypoints=keypoints,
+            candidate_keypoints=candidate_keypoints,
+            homography=homography,
+            reason=f"temporally matched layout identity symmetry={symmetry_index}",
+        )
+
+    @staticmethod
+    def _recompute_visibility(
+        layout: CourtLayout,
+        *,
+        width: int,
+        height: int,
+    ) -> CourtLayout:
+        return replace(
+            layout,
+            keypoints=tuple(
+                replace(
+                    point,
+                    in_frame=0.0 <= point.x < width and 0.0 <= point.y < height,
+                )
+                for point in layout.keypoints
+            ),
+        )
 
     @staticmethod
     def _gray(frame: Image) -> NDArray[np.uint8]:

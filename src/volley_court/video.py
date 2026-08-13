@@ -82,7 +82,10 @@ class WebVideoWriter:
             ]
         )
         if audio_source is not None:
-            command.extend(["-c:a", "aac", "-b:a", "160k", "-shortest"])
+            # Do not use ``-shortest`` here. Source audio can end a few
+            # milliseconds before the decoded video timeline, which silently
+            # dropped the final source frames from otherwise complete demos.
+            command.extend(["-c:a", "aac", "-b:a", "160k"])
         command.extend(["-movflags", "+faststart", str(output)])
         self._width = width
         self._height = height
