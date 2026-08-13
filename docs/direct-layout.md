@@ -1,14 +1,12 @@
 # Direct single-frame layout head
 
-The candidate architecture keeps the production v1 stride-4 semantic line and ROI heads, then adds a
+The V3 architecture keeps the stride-4 semantic line and ROI heads, then adds a
 structured Pose36 anchor head to the same fused stride-4 YOLO26n feature map. The head predicts:
 
 - one spatial heatmap and sub-cell offset for each of the 36 canonical court anchors;
 - one visibility logit for each anchor;
 - one observability logit saying whether the frame contains enough two-dimensional evidence to solve a
-  complete court;
-- eight orientation logits from a spatial 4x4 pooled feature map. Global average pooling is not used
-  here because it erases the left/right and near/far spatial identity needed by the court topology.
+  complete court.
 
 At inference, visible identity-bearing anchors solve a bounded homography and therefore all original
 Pose36 keypoints. The primary pass is 128-iteration RANSAC; a 512-iteration USAC pass is attempted only
@@ -40,8 +38,10 @@ layout head once. It then performs a fixed-cost seven-line evidence check and re
 - `ambiguous`, when layout proposals or semantic identities disagree;
 - `abstained`, when the court is not observable or the geometric evidence is insufficient.
 
-The orientation head ranks only geometrically valid topology permutations. The verifier never repairs
-or invents a layout; it rejects unsupported output. Video tracking may smooth accepted layouts, but
+The ordered Pose36 slots preserve left/right and near/far identity directly. The verifier never repairs
+or invents a layout; it rejects unsupported output. A complete seven-line match can tolerate one weak
+semantic identity at an occluded net/post intersection, while partial layouts remain on the strict
+semantic threshold. Video tracking may smooth accepted layouts, but
 release evaluation always inspects raw single-frame results first.
 
 ## H100 stages
@@ -57,6 +57,7 @@ S1 trains only the direct head on synthetic data, leaving every production v1 pa
 the existing dense output layers frozen, warms the direct head on real data, then allows the shared
 features to adapt under both dense and layout losses.
 
-The released v2 checkpoint adds S6: geometry and dense heads remain frozen while the spatial eight-way
-orientation classifier is trained with class-balanced loss. Epoch 20 is selected by the fixed real-test,
-latency, and consecutive-frame visual gates rather than training loss alone.
+V3 adds the global soft-argmax coordinate objective and low-gradient dense-head ablations. The selected
+supervised epoch is then regularized for two epochs against 255 stable V2 video layouts. The teacher
+predictions are consistency data only, never evaluation truth. The release is selected by the fixed
+real-test, latency, zero-severe-accept, and consecutive-frame visual gates rather than loss alone.

@@ -36,30 +36,39 @@ uv run volley-court-convert \
 1. Synthetic dense context teaches court geometry and camera coverage.
 2. Real adaptation corrects appearance and broadcast-domain shift.
 3. Direct Pose36 anchors learn a single-frame homography proposal.
-4. The released S6 epoch trains only the spatial orientation classifier. Geometry, shared features,
-   and dense heads remain frozen so orientation training cannot destroy the accepted layout shape.
+4. V2 established the direct layout and strict semantic verifier.
+5. V3 adds a global soft-argmax layout loss, low-gradient ablations, and video-teacher consistency.
+   The final checkpoint is selected by PCK, precision, severe-accept, and video gates rather than
+   total validation loss.
 
-The exact released S6 command is preserved in
-[`scripts/train_direct_layout_s6_spatial_orientation.sh`](../scripts/train_direct_layout_s6_spatial_orientation.sh).
-Its essential settings are:
+The supervised V3 ablation is preserved in
+[`scripts/train_v3_accuracy_ablation.sh`](../scripts/train_v3_accuracy_ablation.sh). The selected
+`joint-low-gradient/epoch-0005.pt` checkpoint is regularized with the exact release command:
 
 ```bash
 uv run volley-court-train \
-  --data artifacts/converted-real-video-hard-v2 \
-  --weights runs/direct-layout-s2-anchor40-v8-20260812/best.pt \
-  --output runs/direct-layout-s6-spatial-orientation-v1-20260813 \
-  --epochs 60 --save-every 2 --batch 32 --workers 4 --device cuda:0 \
+  --data artifacts/converted-teacher-clip-v2-20260813 \
+  --weights runs/v3-accuracy-ablation-20260813/joint-low-gradient/epoch-0005.pt \
+  --output runs/v3-e5-teacher-consistency-20260813 \
+  --epochs 3 --save-every 1 --batch 32 --workers 8 --device cuda:0 \
+  --imgsz 512 --lr 0.00001 --weight-decay 0.0005 \
   --target-mode dense_semantic --layout-proposals 1 \
-  --freeze-feature-epochs 60 --freeze-shared-epochs 60 \
-  --freeze-dense-epochs 60 --freeze-layout-geometry-epochs 60 \
-  --base-head-gradient-scale 0 --hard-negative-probability 0 --lr 0.001 \
-  --layout-coordinate-weight 0 --layout-validity-weight 0 \
-  --layout-proposal-weight 1 \
-  --layout-orientation-class-weights 1.0,4.7,5.2,8.0,3.1,4.6,8.0,3.2
+  --freeze-feature-epochs 3 --freeze-shared-epochs 3 --freeze-dense-epochs 3 \
+  --base-head-gradient-scale 0 --hard-negative-probability 0 \
+  --family-weight 0.5 --identity-weight 1.25 --roi-weight 0.5 \
+  --layout-coordinate-weight 8 --layout-validity-weight 1.5 \
+  --layout-softargmax-weight 0 --seed 36 --amp-dtype bf16
 ```
 
-Epoch 20 was selected. Later epochs were not preferred merely because they trained longer; the fixed
-real-test, latency, and consecutive-frame visual gates decide the release.
+For V3, the best supervised candidate was regularized for two epochs against 255 stable V2 layouts
+sampled every three frames from `clip.mp4`. Those predictions are consistency data, not evaluation
+ground truth. `scripts/build_video_teacher_dataset.py` records the extraction step, and
+`scripts/interpolate_layout_checkpoints.py` supports validation-gated model-soup ablations.
+The released V3 file is epoch 2 of this consistency run; epoch 3 was evaluated and rejected.
+
+Longer runs were rejected: after roughly five epochs the small real split overfit even while loss
+continued to look reasonable. The fixed real-test, latency, and consecutive-frame visual gates
+decide the release.
 
 ## Evaluation and release gate
 

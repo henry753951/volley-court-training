@@ -1,0 +1,34 @@
+{
+  "schema": "volley-court-lines-benchmark-v1",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "python": "3.12.13",
+  "torch": "2.11.0+cu128",
+  "torch_cuda": "12.8",
+  "device": "cuda:0",
+  "gpu": "NVIDIA GeForce RTX 5070",
+  "checkpoint": "H:\\Repos\\volley-court-training-semantic-layout\\artifacts\\next-version-audit\\v3-final-candidate\\court-line-yolo26n-layout-v3-candidate.pt",
+  "checkpoint_bytes": 7226080,
+  "parameters": 1659096,
+  "estimated_gflops_640": 9.16,
+  "image_size": 512,
+  "half": true,
+  "fused": true,
+  "decoder": "cuda",
+  "include_layout": true,
+  "anchor_ransac_max_iters": 128,
+  "anchor_solver": "hybrid",
+  "results": [
+    {
+      "batch_size": 1,
+      "frames": 256,
+      "batches": 256,
+      "core_fps": 116.03228507876729,
+      "pipeline_fps": 79.04709224349203,
+      "mean_frame_latency_ms": 12.650686718743032,
+      "p50_batch_latency_ms": 12.103600001864834,
+      "p95_batch_latency_ms": 15.966225000738632,
+      "peak_cuda_memory_bytes": 58920960
+    }
+  ],
+  "source": "H:\\Repos\\volley-court-training\\test-videos\\clip.mp4"
+}

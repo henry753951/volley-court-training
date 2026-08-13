@@ -1,17 +1,17 @@
 # Volley Court Lines
 
 Fast, typed volleyball-court layout inference built on a compact YOLO26n backbone. One unified
-network predicts the 36 identity-bearing court anchors, layout observability, and eight canonical
-orientation classes while retaining dense zero-width line evidence as a rejection signal. An
+network predicts the 36 identity-bearing court anchors and layout observability while retaining
+seven-class dense zero-width line evidence as a rejection signal. An
 accepted single-frame result directly contains the homography and all 36 projected keypoints.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB)](https://www.python.org/)
 [![uv](https://img.shields.io/badge/package-uv-DE5FE9)](https://docs.astral.sh/uv/)
 [![typed](https://img.shields.io/badge/typing-py.typed-2F80ED)](src/volley_court/py.typed)
 
-[![Direct-layout demo](docs/assets/direct-layout-v2-preview.jpg)](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2-final.mp4)
+[![Direct-layout demo](docs/assets/direct-layout-v3-preview.jpg)](https://assets.hsulab.net/demos/volley-court-lines/v3/clip-volley-court-lines-v3.mp4)
 
-**[Play the 14.8 s H.264 demo](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2-final.mp4)**
+**[Play the 14.8 s H.264 demo](https://assets.hsulab.net/demos/volley-court-lines/v3/clip-volley-court-lines-v3.mp4)**
 — generated locally from every source frame of `test-videos/clip.mp4` through the public module.
 
 The visualizer keeps evidence and accepted geometry separate. Unresolved frames do not receive a
@@ -23,11 +23,11 @@ the direct layout head on every source frame and uses the tracker only for tempo
 The published wheel is the simplest internal installation path:
 
 ```bash
-uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.2.0/volley_court_lines-0.2.0-py3-none-any.whl"
+uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.3.0/volley_court_lines-0.3.0-py3-none-any.whl"
 ```
 
 ```bash
-pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.2.0/volley_court_lines-0.2.0-py3-none-any.whl"
+pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.3.0/volley_court_lines-0.3.0-py3-none-any.whl"
 ```
 
 For development:
@@ -89,11 +89,12 @@ a fallback and is not recommended for web previews.
 
 | Asset | Contents | SHA-256 |
 | --- | --- | --- |
-| [v2 direct-layout checkpoint](https://assets.hsulab.net/models/volley-court-lines/v2/court-line-yolo26n-layout-v2.pt) | 1.66 M parameters, 6.61 MiB | `8fa568...a0abd` |
+| [v3 direct-layout checkpoint](https://assets.hsulab.net/models/volley-court-lines/v3/court-line-yolo26n-layout-v3.pt) | 1.66 M parameters, 6.55 MiB | `fb4abb...b71e4` |
+| [v2 rollback checkpoint](https://assets.hsulab.net/models/volley-court-lines/v2/court-line-yolo26n-layout-v2.pt) | previous production model | `8fa568...a0abd` |
 | [v1 rollback checkpoint](https://assets.hsulab.net/models/volley-court-lines/v1/court-line-yolo26n-v3.pt) | production rollback only | `b0392c...19e86` |
 | [Synthetic dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-synthetic-combined-2000-camera-mode-v2.tar.gz) | 2,000 Blender images | `5f8fa0...78569` |
 | [Real dataset](https://assets.hsulab.net/datasets/volley-court-lines/v1/court36-unified.tar.gz) | 357 real images | `a40be9...12a4c` |
-| [v2 demo video](https://assets.hsulab.net/demos/volley-court-lines/v2/clip-volley-court-lines-v2-final.mp4) | 1080p H.264 High/yuv420p/AAC/faststart | `fa7b62...1676` |
+| [v3 demo video](https://assets.hsulab.net/demos/volley-court-lines/v3/clip-volley-court-lines-v3.mp4) | 884-frame 1080p H.264 High/yuv420p/AAC/faststart | `14796c...5a263` |
 
 Full checksums and dataset structure are in [docs/datasets.md](docs/datasets.md).
 
@@ -104,9 +105,9 @@ direct-layout verification, and result construction.
 
 | GPU / path | Batch | Core FPS | Pipeline FPS | Latency |
 | --- | ---: | ---: | ---: | ---: |
-| RTX 5070, direct layout | 1 | 129.04 | 89.23 | 10.96 ms p50 / 13.14 ms p95 |
-| H100 NVL, direct layout | 1 | 159.71 | 94.90 | 10.06 ms p50 / 11.53 ms p95 |
-| RTX 5070, 1080p H.264 demo | 8 | 393.83 model/decode | 62.74 end-to-end | layout inferred every frame |
+| RTX 5070, direct layout | 1 | 116.03 | 79.05 | 12.10 ms p50 / 15.97 ms p95 |
+| H100 NVL, direct layout | 1 | 155.39 | 87.46 | 10.11 ms p50 / 26.67 ms p95 |
+| RTX 5070, 1080p H.264 demo | 16 | 505.70 model/decode | 69.59 end-to-end | layout inferred every frame |
 
 The H100 and RTX 5070 rows are independent operational measurements on different hosts, not a
 claim that one GPU is universally faster. The browser-safe demo was
@@ -119,23 +120,24 @@ specifications.
 
 On the 37-image real test split:
 
-- visible-keypoint PCK@1%: **51.00%**;
-- visible-keypoint precision@1%: **81.96%**;
-- visible-keypoint F1@1%: **62.87%**;
+- visible-keypoint PCK@1%: **50.87%**;
+- visible-keypoint precision@1%: **84.30%**;
+- visible-keypoint F1@1%: **63.45%**;
 - accepted layouts with PCK@2% below 25%: **0**;
-- layout status: 19 `ok`, 6 `ambiguous`, 12 `abstained`.
+- layout status: 18 `ok`, 6 `ambiguous`, 13 `abstained`.
 
 Missing and abstained keypoints count against PCK recall. The conservative verifier intentionally
 prefers no connected court over a geometrically unsupported layout.
 
 ## Training design
 
-The v2 model builds on the two dense-context stages and adds the direct-layout stages:
+The v3 model builds on the synthetic/real dense-context stages and the V2 direct layout:
 
 1. **S1 synthetic:** 2,000 Blender images, 20 epochs, batch 64, BF16, frozen shared features.
 2. **S2 real:** 357 real images, appearance and layout adaptation.
-3. **S6 orientation:** spatial 4x4 orientation head, eight topology-preserving classes, balanced
-   cross-entropy, and frozen accepted geometry while orientation converges.
+3. **V3 supervised sweep:** recall-aware soft-argmax layout loss with validation/test gating.
+4. **Teacher consistency:** two low-rate epochs on 255 stable, unlabelled-video V2 layouts to
+   prevent the real-data fine-tune from regressing temporal behavior.
 
 This ordering teaches court geometry and camera coverage first, then adapts appearance to real
 broadcasts without discarding the learned topology. Exact commands and the limitations of the
