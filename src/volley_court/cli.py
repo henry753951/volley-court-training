@@ -19,7 +19,7 @@ from .visualization import CourtVisualizer, VisualizationConfig
 
 
 def _model_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--model", default="v2", help="Checkpoint path or bundled model name")
+    parser.add_argument("--model", default="v3", help="Checkpoint path or bundled model name")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--imgsz", type=int, default=512)
     parser.add_argument("--conf", type=float, default=0.25)
@@ -64,7 +64,7 @@ def _model(args: argparse.Namespace) -> CourtLineModel:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="volley-court")
-    parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.3.0")
     commands = parser.add_subparsers(dest="command", required=True)
 
     download = commands.add_parser("download", help="Download and verify the default model")

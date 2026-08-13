@@ -51,3 +51,6 @@ train layout-only --freeze-dense-epochs 40 --base-head-gradient-scale 0.0
 
 # Then allow low-gradient semantic adaptation for the verifier's line-identity evidence.
 train joint-low-gradient --freeze-dense-epochs 5 --base-head-gradient-scale 0.25
+
+# This sweep is exploratory: release selection is performed with fixed PCK,
+# precision, severe-accept, and consecutive-video gates rather than loss alone.

@@ -565,6 +565,13 @@ def layout_from_direct_corners(
         if candidate is not None and len(candidate.identity_probabilities) == 7:
             semantic_scores.append(candidate.identity_probabilities[topology_index])
     semantic_alignment = float(np.mean(semantic_scores)) if semantic_scores else None
+    semantic_threshold = minimum_semantic_alignment
+    if matched == len(CANONICAL_LINES) and evidence_score >= 0.70:
+        # A complete seven-line geometric match is much stronger evidence than
+        # one weak identity score at an occluded net/post intersection. Keep
+        # partial layouts on the strict threshold so unrelated lines cannot
+        # manufacture a connected court.
+        semantic_threshold = min(semantic_threshold, 0.55)
 
     projected = _project_points(homography, CANONICAL_KEYPOINTS)
     if projected is None:
@@ -610,7 +617,7 @@ def layout_from_direct_corners(
         status, reason = "abstained", "direct layout evidence score is below threshold"
     elif disagreement > 0.05 and margin < 0.15:
         status, reason = "ambiguous", "direct layout proposals disagree"
-    elif semantic_alignment is not None and semantic_alignment < minimum_semantic_alignment:
+    elif semantic_alignment is not None and semantic_alignment < semantic_threshold:
         status, reason = "ambiguous", "semantic line identities reject the direct layout"
 
     score = float(np.clip(validity_probability * evidence_score, 0.0, 1.0))

@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--freeze-feature-epochs", type=int, default=2)
     parser.add_argument("--freeze-shared-epochs", type=int, default=0)
     parser.add_argument("--freeze-dense-epochs", type=int, default=0)
+    parser.add_argument(
+        "--freeze-dense-stats",
+        action="store_true",
+        help="Keep dense-head normalization statistics fixed while its weights remain trainable",
+    )
     parser.add_argument("--freeze-layout-geometry-epochs", type=int, default=0)
     parser.add_argument("--base-head-gradient-scale", type=float, default=1.0)
     parser.add_argument(
@@ -115,6 +120,7 @@ def _run_epoch(
     feature_frozen: bool,
     shared_frozen: bool,
     dense_frozen: bool,
+    dense_stats_frozen: bool,
     layout_geometry_frozen: bool,
 ) -> dict[str, float]:
     training = optimizer is not None
@@ -123,7 +129,7 @@ def _run_epoch(
         model.feature_layers.eval()
     if training and shared_frozen:
         model.set_shared_features_eval()
-    if training and dense_frozen:
+    if training and (dense_frozen or dense_stats_frozen):
         model.set_dense_head_eval()
     if training and layout_geometry_frozen:
         model.set_layout_geometry_eval()
@@ -396,6 +402,7 @@ def main() -> int:
         "feature_frozen",
         "shared_frozen",
         "dense_frozen",
+        "dense_stats_frozen",
         "layout_geometry_frozen",
         *[
             f"train_{key}"
@@ -464,6 +471,7 @@ def main() -> int:
                 feature_frozen,
                 shared_frozen,
                 dense_frozen,
+                args.freeze_dense_stats,
                 layout_geometry_frozen,
             )
             validation_metrics = _run_epoch(
@@ -479,6 +487,7 @@ def main() -> int:
                 False,
                 False,
                 False,
+                False,
             )
             scheduler.step()
             row = {
@@ -488,6 +497,7 @@ def main() -> int:
                 "feature_frozen": feature_frozen,
                 "shared_frozen": shared_frozen,
                 "dense_frozen": dense_frozen,
+                "dense_stats_frozen": args.freeze_dense_stats,
                 "layout_geometry_frozen": layout_geometry_frozen,
                 **{f"train_{key}": value for key, value in train_metrics.items()},
                 **{f"valid_{key}": value for key, value in validation_metrics.items()},

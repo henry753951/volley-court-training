@@ -18,8 +18,15 @@ class ModelSpec:
 
 
 DEFAULT_MODEL = ModelSpec(
+    name="court-line-yolo26n-layout-v3",
+    url=("https://assets.hsulab.net/models/volley-court-lines/v3/court-line-yolo26n-layout-v3.pt"),
+    sha256="fb4abb0656d313fb5b6a3ec57d5b1531ac3b5052c14575dea10d4d06f46b71e4",
+    filename="court-line-yolo26n-layout-v3.pt",
+)
+
+ROLLBACK_MODEL_V2 = ModelSpec(
     name="court-line-yolo26n-layout-v2",
-    url=("https://assets.hsulab.net/models/volley-court-lines/v2/court-line-yolo26n-layout-v2.pt"),
+    url="https://assets.hsulab.net/models/volley-court-lines/v2/court-line-yolo26n-layout-v2.pt",
     sha256="8fa56841200c5bc09635a2b26325a88e596a0f1198791ba5860af96ca41a0abd",
     filename="court-line-yolo26n-layout-v2.pt",
 )
@@ -101,8 +108,10 @@ def resolve_model_path(model: str | Path | ModelSpec | None = None) -> Path:
     configured = os.environ.get("VOLLEY_COURT_MODEL")
     if model is None and configured:
         model = configured
-    if model is None or model == "v2" or model == DEFAULT_MODEL.name:
+    if model is None or model == "v3" or model == DEFAULT_MODEL.name:
         return download_model(DEFAULT_MODEL)
+    if model == "v2" or model == ROLLBACK_MODEL_V2.name:
+        return download_model(ROLLBACK_MODEL_V2)
     if model == "v1" or model == ROLLBACK_MODEL_V1.name:
         return download_model(ROLLBACK_MODEL_V1)
     if isinstance(model, ModelSpec):

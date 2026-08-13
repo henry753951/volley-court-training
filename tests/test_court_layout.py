@@ -106,6 +106,28 @@ def test_direct_layout_uses_fixed_order_and_dense_evidence() -> None:
     assert len(result["keypoints"]) == 36
 
 
+def test_direct_layout_uses_complete_geometry_to_tolerate_one_weak_identity() -> None:
+    rows, homography = _perspective_segments()
+    for index, row in enumerate(rows):
+        probabilities = [0.44 / 6.0] * 7
+        probabilities[index] = 0.56
+        row["identity_probabilities"] = probabilities
+    corners = cv2.perspectiveTransform(
+        np.asarray(((0.0, 0.0), (0.0, 18.0), (9.0, 18.0), (9.0, 0.0)), dtype=np.float32).reshape(
+            -1, 1, 2
+        ),
+        homography,
+    ).reshape(1, 4, 2)
+
+    complete = layout_from_direct_corners(corners, np.asarray([1.0]), 0.99, rows, 640, 640)
+    partial = layout_from_direct_corners(corners, np.asarray([1.0]), 0.99, rows[:-1], 640, 640)
+
+    assert complete["status"] == "ok"
+    assert complete["matched_line_count"] == 7
+    assert partial["status"] == "ambiguous"
+    assert partial["matched_line_count"] == 6
+
+
 def test_direct_layout_rejects_near_far_flip() -> None:
     rows, homography = _perspective_segments()
     corners = cv2.perspectiveTransform(
