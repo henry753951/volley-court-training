@@ -44,7 +44,7 @@ Do not publish candidate keypoints as accepted points when status is `ambiguous`
 ## Frame synchronization
 
 For overlays that must track every presented source frame, infer at `court_stride=1` and carry an
-explicit source-frame timestamp with every result. The v2 layout head runs for every frame in the
+explicit source-frame timestamp with every result. The v3 layout head runs for every frame in the
 batch; batching changes scheduling, not sampling. Map each result back to its source frame.
 
 For offline clips:
@@ -54,8 +54,17 @@ results = model.predict_many(frames, include_layout=True)
 ```
 
 Direct layout verification runs independently for every frame. The optional `CourtLayoutTracker`
-smooths fresh accepted matches, rejects inconsistent optical flow with RANSAC, and expires stale
-state. Feed it frames in source order; do not reuse a result across frames without tracking it.
+locks every accepted video homography to one image-facing Pose36 convention: court length points
+left/up and court width points right/down along whichever image component is dominant. This keeps
+left/right and near/far identity stable in both side and end views. Keypoints are always reprojected
+from the same smoothed homography returned to the caller.
+
+After acquisition, a semantic-only ambiguous frame may continue the layout only when it still has
+at least five matched physical lines and its canonical homography is within 3% of the previous
+layout. Optical flow may bridge up to 60 frames; an untracked static layout is held for at most two
+frames. Large jumps require three consistent accepted frames before re-anchoring. These rules never
+bootstrap a court from ambiguous evidence. Feed frames in source order and reset the tracker at an
+explicit stream boundary.
 
 ## Deployment knobs
 

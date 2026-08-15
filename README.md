@@ -23,11 +23,11 @@ the direct layout head on every source frame and uses the tracker only for tempo
 The published wheel is the simplest internal installation path:
 
 ```bash
-uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.3.0/volley_court_lines-0.3.0-py3-none-any.whl"
+uv add "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.3.1/volley_court_lines-0.3.1-py3-none-any.whl"
 ```
 
 ```bash
-pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.3.0/volley_court_lines-0.3.0-py3-none-any.whl"
+pip install "volley-court-lines @ https://assets.hsulab.net/packages/volley-court-lines/v0.3.1/volley_court_lines-0.3.1-py3-none-any.whl"
 ```
 
 For development:

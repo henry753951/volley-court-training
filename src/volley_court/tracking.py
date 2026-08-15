@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from .layout import COURT_SYMMETRY_TRANSFORMS, POSE36_SYMMETRY_MAPS
+from .layout import CANONICAL_KEYPOINTS, COURT_SYMMETRY_TRANSFORMS
 from .types import CourtKeypoint, CourtLayout, Image
 
 
@@ -20,7 +20,10 @@ class LayoutTrackingConfig:
     smoothing: float = 0.65
     fast_motion_threshold_px: float = 18.0
     max_identity_jump_ratio: float = 0.08
-    max_hold_frames: int = 25
+    max_hold_frames: int = 60
+    max_static_hold_frames: int = 2
+    reacquire_confirmation_frames: int = 3
+    max_ambiguous_continuation_ratio: float = 0.03
 
     def __post_init__(self) -> None:
         if not 0.0 < self.smoothing <= 1.0:
@@ -31,6 +34,12 @@ class LayoutTrackingConfig:
             raise ValueError("max_identity_jump_ratio must be in (0, 1)")
         if self.max_hold_frames < 0:
             raise ValueError("max_hold_frames cannot be negative")
+        if self.max_static_hold_frames < 0:
+            raise ValueError("max_static_hold_frames cannot be negative")
+        if self.reacquire_confirmation_frames < 1:
+            raise ValueError("reacquire_confirmation_frames must be positive")
+        if not 0.0 < self.max_ambiguous_continuation_ratio < 1.0:
+            raise ValueError("max_ambiguous_continuation_ratio must be in (0, 1)")
 
 
 class CourtLayoutTracker:
@@ -41,6 +50,8 @@ class CourtLayoutTracker:
         self._current: CourtLayout | None = None
         self._missed_frames = 0
         self._previous_gray: NDArray[np.uint8] | None = None
+        self._pending_layout: CourtLayout | None = None
+        self._pending_count = 0
 
     @property
     def current(self) -> CourtLayout | None:
@@ -50,6 +61,7 @@ class CourtLayoutTracker:
         self._current = None
         self._missed_frames = 0
         self._previous_gray = None
+        self._clear_pending()
 
     def update(
         self,
@@ -61,50 +73,172 @@ class CourtLayoutTracker:
     ) -> CourtLayout | None:
         gray = self._gray(frame) if frame is not None else None
         if layout is not None and layout.status == "ok" and len(layout.keypoints) == 36:
+            layout = self._canonicalize_layout(layout, width=width, height=height)
+        if layout is not None and layout.status == "ok" and len(layout.keypoints) == 36:
+            if self._pending_layout is not None and self._current is None:
+                return self._handle_discontinuity(
+                    layout,
+                    gray=gray,
+                    width=width,
+                    height=height,
+                )
             identity_match = self._match_identity(layout, width=width, height=height)
             if identity_match is not None:
-                symmetry_index, direct_distance, best_distance = identity_match
-                if (
-                    symmetry_index != 0
-                    and direct_distance > self.config.max_identity_jump_ratio
-                    and best_distance <= self.config.max_identity_jump_ratio
-                ):
-                    layout = self._align_identity(layout, symmetry_index)
-                elif best_distance > self.config.max_identity_jump_ratio:
-                    tracked = self._track_frame(gray, width=width, height=height)
-                    if tracked is not None:
-                        self._current = replace(
-                            tracked,
-                            reason="tracked through rejected layout discontinuity",
-                        )
-                        self._missed_frames = 0
-                        self._previous_gray = gray
-                        return self._current
-                    self._current = self._recompute_visibility(
+                direct_distance = identity_match
+                if direct_distance > self.config.max_identity_jump_ratio:
+                    return self._handle_discontinuity(
                         layout,
+                        gray=gray,
                         width=width,
                         height=height,
                     )
-                    self._missed_frames = 0
-                    self._previous_gray = gray
-                    return self._current
+            self._clear_pending()
             self._current = self._smooth(layout, width=width, height=height)
             self._missed_frames = 0
             self._previous_gray = gray
             return self._current
+        continuation = self._ambiguous_continuation(layout, width=width, height=height)
+        if continuation is not None:
+            self._clear_pending()
+            self._current = self._smooth(continuation, width=width, height=height)
+            self._current = replace(
+                self._current,
+                score=min(self._current.score, continuation.score) * 0.995,
+                reason="continued from temporally confirmed ambiguous geometry",
+            )
+            self._missed_frames = 0
+            self._previous_gray = gray
+            return self._current
+        self._clear_pending()
         if self._current is not None and self._missed_frames < self.config.max_hold_frames:
             self._missed_frames += 1
             tracked = self._track_frame(gray, width=width, height=height)
-            self._current = tracked or replace(
-                self._current,
-                score=self._current.score * 0.985,
-                reason=f"tracked hold {self._missed_frames}/{self.config.max_hold_frames}",
-            )
-            self._previous_gray = gray
-            return self._current
+            if tracked is not None:
+                self._current = tracked
+                self._previous_gray = gray
+                return self._current
+            if self._missed_frames <= self.config.max_static_hold_frames:
+                self._current = replace(
+                    self._current,
+                    score=self._current.score * 0.985,
+                    reason=(
+                        f"tracked static hold {self._missed_frames}/"
+                        f"{self.config.max_static_hold_frames}"
+                    ),
+                )
+                self._previous_gray = gray
+                return self._current
         self.reset()
         self._previous_gray = gray
         return layout
+
+    def _ambiguous_continuation(
+        self,
+        layout: CourtLayout | None,
+        *,
+        width: int,
+        height: int,
+    ) -> CourtLayout | None:
+        if (
+            self._current is None
+            or layout is None
+            or layout.status != "ambiguous"
+            or layout.reason != "semantic line identities reject the direct layout"
+            or layout.matched_line_count < 5
+            or layout.homography is None
+            or len(layout.candidate_keypoints) != 36
+        ):
+            return None
+        promoted = replace(
+            layout,
+            status="ok",
+            keypoints=layout.candidate_keypoints,
+            reason="candidate for temporal continuation",
+        )
+        canonical = self._canonicalize_layout(promoted, width=width, height=height)
+        if canonical is None:
+            return None
+        distance = self._match_identity(canonical, width=width, height=height)
+        if distance is None or distance > self.config.max_ambiguous_continuation_ratio:
+            return None
+        return canonical
+
+    def _handle_discontinuity(
+        self,
+        layout: CourtLayout,
+        *,
+        gray: NDArray[np.uint8] | None,
+        width: int,
+        height: int,
+    ) -> CourtLayout | None:
+        if self._pending_layout is None or not self._layouts_are_close(
+            self._pending_layout,
+            layout,
+            width=width,
+            height=height,
+        ):
+            self._pending_count = 1
+        else:
+            self._pending_count += 1
+        self._pending_layout = layout
+        if self._pending_count >= self.config.reacquire_confirmation_frames:
+            self._current = self._recompute_visibility(layout, width=width, height=height)
+            self._current = replace(
+                self._current,
+                reason=f"reacquired canonical layout after {self._pending_count} confirmations",
+            )
+            self._missed_frames = 0
+            self._clear_pending()
+            self._previous_gray = gray
+            return self._current
+
+        self._missed_frames += 1
+        tracked = self._track_frame(gray, width=width, height=height)
+        if tracked is not None:
+            self._current = replace(
+                tracked,
+                reason="tracked through pending layout discontinuity",
+            )
+        elif self._current is not None and self._missed_frames <= self.config.max_static_hold_frames:
+            self._current = replace(
+                self._current,
+                score=self._current.score * 0.985,
+                reason=(
+                    f"pending layout discontinuity {self._pending_count}/"
+                    f"{self.config.reacquire_confirmation_frames}"
+                ),
+            )
+        else:
+            self._current = None
+        self._previous_gray = gray
+        return self._current
+
+    def _layouts_are_close(
+        self,
+        first: CourtLayout,
+        second: CourtLayout,
+        *,
+        width: int,
+        height: int,
+    ) -> bool:
+        first_points = {point.id: point for point in first.keypoints}
+        second_points = {point.id: point for point in second.keypoints}
+        diagonal = math.hypot(width, height)
+        if len(first_points) != 36 or len(second_points) != 36 or diagonal <= 0.0:
+            return False
+        distance = median(
+            math.hypot(
+                first_points[index].x - second_points[index].x,
+                first_points[index].y - second_points[index].y,
+            )
+            / diagonal
+            for index in range(36)
+        )
+        return distance <= self.config.max_identity_jump_ratio
+
+    def _clear_pending(self) -> None:
+        self._pending_layout = None
+        self._pending_count = 0
 
     def _match_identity(
         self,
@@ -112,7 +246,7 @@ class CourtLayoutTracker:
         *,
         width: int,
         height: int,
-    ) -> tuple[int, float, float] | None:
+    ) -> float | None:
         if self._current is None or len(self._current.keypoints) != 36:
             return None
         previous = {point.id: point for point in self._current.keypoints}
@@ -122,61 +256,69 @@ class CourtLayoutTracker:
         diagonal = math.hypot(width, height)
         if diagonal <= 0.0:
             return None
-        distances = tuple(
-            median(
-                math.hypot(
-                    previous[index].x - candidate[permutation[index]].x,
-                    previous[index].y - candidate[permutation[index]].y,
-                )
-                / diagonal
-                for index in range(36)
+        return median(
+            math.hypot(
+                previous[index].x - candidate[index].x,
+                previous[index].y - candidate[index].y,
             )
-            for permutation in POSE36_SYMMETRY_MAPS
-        )
-        symmetry_index = min(range(len(distances)), key=distances.__getitem__)
-        return symmetry_index, distances[0], distances[symmetry_index]
-
-    @staticmethod
-    def _align_identity(layout: CourtLayout, symmetry_index: int) -> CourtLayout:
-        permutation = POSE36_SYMMETRY_MAPS[symmetry_index]
-        by_id = {point.id: point for point in layout.keypoints}
-        keypoints = tuple(
-            replace(by_id[permutation[index]], id=index, source="temporal_identity_match")
+            / diagonal
             for index in range(36)
         )
-        inverse = {source_id: target_id for target_id, source_id in enumerate(permutation)}
-        candidate_keypoints = tuple(
-            sorted(
-                (
-                    replace(
-                        point,
-                        id=inverse.get(point.id, point.id),
-                        source="temporal_identity_match",
-                    )
-                    for point in layout.candidate_keypoints
-                ),
-                key=lambda point: point.id,
-            )
+
+    def _canonicalize_layout(
+        self,
+        layout: CourtLayout,
+        *,
+        width: int,
+        height: int,
+    ) -> CourtLayout | None:
+        if layout.homography is None:
+            return layout
+        resolved = self._resolve_image_facing_symmetry(
+            np.asarray(layout.homography, dtype=np.float64)
         )
-        homography = layout.homography
-        if homography is not None:
-            aligned = (
-                np.asarray(homography, dtype=np.float64) @ COURT_SYMMETRY_TRANSFORMS[symmetry_index]
-            )
-            scale = float(aligned[2, 2])
-            if abs(scale) > 1e-12:
-                aligned /= scale
-            homography = cast(
-                tuple[tuple[float, float, float], ...],
-                tuple(tuple(float(value) for value in row) for row in aligned),
-            )
-        return replace(
+        if resolved is None:
+            return None
+        homography, symmetry_index = resolved
+        canonical = self._replace_from_homography(
             layout,
-            keypoints=keypoints,
-            candidate_keypoints=candidate_keypoints,
-            homography=homography,
-            reason=f"temporally matched layout identity symmetry={symmetry_index}",
+            homography,
+            width=width,
+            height=height,
+            source="canonical_identity_lock",
+            reason=(
+                "canonical image-facing layout"
+                if symmetry_index == 0
+                else f"canonicalized layout symmetry={symmetry_index}"
+            ),
         )
+        return canonical
+
+    @staticmethod
+    def _resolve_image_facing_symmetry(
+        homography: NDArray[np.float64],
+    ) -> tuple[NDArray[np.float64], int] | None:
+        canonical_corners = np.asarray(
+            ((0.0, 0.0), (9.0, 0.0), (0.0, 18.0), (9.0, 18.0)),
+            dtype=np.float64,
+        ).reshape(-1, 1, 2)
+        for symmetry_index, symmetry in enumerate(COURT_SYMMETRY_TRANSFORMS):
+            candidate = np.asarray(homography, dtype=np.float64) @ symmetry
+            corners = np.asarray(
+                cv2.perspectiveTransform(canonical_corners, candidate), dtype=np.float64
+            ).reshape(-1, 2)
+            if not np.isfinite(corners).all():
+                continue
+            length_axis = np.mean(corners[2:], axis=0) - np.mean(corners[:2], axis=0)
+            width_axis = np.mean(corners[[1, 3]], axis=0) - np.mean(corners[[0, 2]], axis=0)
+            length_component = length_axis[int(abs(length_axis[1]) > abs(length_axis[0]))]
+            width_component = width_axis[int(abs(width_axis[1]) > abs(width_axis[0]))]
+            if length_component >= 0.0 or width_component <= 0.0:
+                continue
+            scale = float(candidate[2, 2])
+            normalized = candidate / scale if abs(scale) > 1e-12 else candidate
+            return np.asarray(normalized, dtype=np.float64), symmetry_index
+        return None
 
     @staticmethod
     def _recompute_visibility(
@@ -275,10 +417,16 @@ class CourtLayoutTracker:
         homography = self._current.homography
         if homography is not None:
             composed = delta @ np.asarray(homography, dtype=np.float64)
-            homography = cast(
-                tuple[tuple[float, float, float], ...],
-                tuple(tuple(float(value) for value in row) for row in composed),
+            synchronized = self._replace_from_homography(
+                self._current,
+                composed,
+                width=width,
+                height=height,
+                source="temporal_optical_flow",
+                reason="tracked with optical flow",
             )
+            if synchronized is not None:
+                return replace(synchronized, score=self._current.score * 0.995)
         return replace(
             self._current,
             keypoints=points,
@@ -313,7 +461,73 @@ class CourtLayoutTracker:
             )
             for point in layout.keypoints
         )
+        if layout.homography is not None and self._current.homography is not None:
+            by_id = {point.id: point for point in points}
+            outer_ids = (0, 4, 5, 9)
+            if all(index in by_id for index in outer_ids):
+                source = np.asarray(
+                    [CANONICAL_KEYPOINTS[index] for index in outer_ids], dtype=np.float32
+                )
+                destination = np.asarray(
+                    [(by_id[index].x, by_id[index].y) for index in outer_ids], dtype=np.float32
+                )
+                homography = cv2.getPerspectiveTransform(source, destination)
+                synchronized = self._replace_from_homography(
+                    layout,
+                    np.asarray(homography, dtype=np.float64),
+                    width=width,
+                    height=height,
+                    source="temporally_smoothed_homography",
+                    reason="temporally tracked layout",
+                )
+                if synchronized is not None:
+                    return synchronized
         return replace(layout, keypoints=points, reason="temporally tracked layout")
+
+    @staticmethod
+    def _replace_from_homography(
+        layout: CourtLayout,
+        homography: NDArray[np.float64],
+        *,
+        width: int,
+        height: int,
+        source: str,
+        reason: str,
+    ) -> CourtLayout | None:
+        matrix = np.asarray(homography, dtype=np.float64).copy()
+        scale = float(matrix[2, 2])
+        if abs(scale) <= 1e-12:
+            return None
+        matrix /= scale
+        canonical = np.asarray(CANONICAL_KEYPOINTS, dtype=np.float64).reshape(-1, 1, 2)
+        projected = np.asarray(cv2.perspectiveTransform(canonical, matrix), dtype=np.float64).reshape(
+            -1, 2
+        )
+        if not np.isfinite(projected).all():
+            return None
+        by_id = {point.id: point for point in layout.keypoints}
+        if len(by_id) != 36:
+            return None
+        keypoints = tuple(
+            replace(
+                by_id[index],
+                x=float(position[0]),
+                y=float(position[1]),
+                in_frame=(0.0 <= float(position[0]) < width and 0.0 <= float(position[1]) < height),
+                source=source,
+            )
+            for index, position in enumerate(projected)
+        )
+        homography_rows = cast(
+            tuple[tuple[float, float, float], ...],
+            tuple(tuple(float(value) for value in row) for row in matrix),
+        )
+        return replace(
+            layout,
+            keypoints=keypoints,
+            homography=homography_rows,
+            reason=reason,
+        )
 
     @staticmethod
     def _smooth_point(
