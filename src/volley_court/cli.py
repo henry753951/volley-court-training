@@ -12,8 +12,8 @@ import cv2
 from .api import CourtLineModel, InferenceConfig
 from .assets import DEFAULT_MODEL, download_model, sha256sum
 from .benchmark import benchmark_model, read_video_frames
-from .tracking import CourtLayoutTracker
-from .types import Image
+from .tracking import CourtLayoutTracker, LayoutTrackingConfig
+from .types import CourtFrameResult, CourtLayout, Image
 from .video import open_video_writer
 from .visualization import CourtVisualizer, VisualizationConfig
 
@@ -64,7 +64,7 @@ def _model(args: argparse.Namespace) -> CourtLineModel:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="volley-court")
-    parser.add_argument("--version", action="version", version="%(prog)s 0.3.0")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.3.2")
     commands = parser.add_subparsers(dest="command", required=True)
 
     download = commands.add_parser("download", help="Download and verify the default model")
@@ -94,6 +94,15 @@ def _parser() -> argparse.ArgumentParser:
         help="web writes H.264/yuv420p/faststart and preserves source audio",
     )
     video.add_argument("--max-frames", type=int, default=0)
+    video.add_argument(
+        "--start-backfill-frames",
+        type=int,
+        default=150,
+        help=(
+            "offline-only maximum number of leading frames to recover backward from the "
+            "first trustworthy layout; zero disables"
+        ),
+    )
     video.add_argument("--overwrite", action="store_true")
 
     benchmark = commands.add_parser("benchmark", help="Benchmark preloaded video frames")
@@ -148,6 +157,8 @@ def _predict_video(args: argparse.Namespace) -> int:
         raise ValueError("--batch-size must be positive")
     if args.layout_every < 0:
         raise ValueError("--layout-every cannot be negative")
+    if args.start_backfill_frames < 0:
+        raise ValueError("--start-backfill-frames cannot be negative")
     if args.output.exists() and not args.overwrite:
         raise FileExistsError(f"refusing to overwrite: {args.output}")
     capture = cv2.VideoCapture(str(args.source))
@@ -174,13 +185,77 @@ def _predict_video(args: argparse.Namespace) -> int:
         )
     )
     tracker = CourtLayoutTracker()
+    pending_start: list[tuple[Image, CourtFrameResult, CourtLayout | None]] = []
+    acquired_layout = False
+    backfilled_start_frames = 0
+    frames_read = 0
     frames_written = 0
     inference_seconds = 0.0
     layout_status_counts: dict[str, int] = {}
+
+    def write_result(
+        frame: Image,
+        result: CourtFrameResult,
+        layout: CourtLayout | None,
+    ) -> None:
+        nonlocal frames_written
+        rendered_result = result.with_layout(layout)
+        status = layout.status if layout is not None else "evidence"
+        layout_status_counts[status] = layout_status_counts.get(status, 0) + 1
+        writer.write(visualizer.draw(frame, rendered_result))
+        frames_written += 1
+
+    def flush_pending_without_backfill() -> None:
+        while pending_start:
+            pending_frame, pending_result, pending_layout = pending_start.pop(0)
+            write_result(pending_frame, pending_result, pending_layout)
+
+    def backfill_pending(seed_frame: Image, seed_layout: CourtLayout) -> None:
+        nonlocal backfilled_start_frames
+        if not pending_start:
+            return
+        backward_tracker = CourtLayoutTracker(
+            LayoutTrackingConfig(
+                max_hold_frames=max(60, args.start_backfill_frames),
+                max_static_hold_frames=2,
+            )
+        )
+        backward_tracker.update(
+            seed_layout,
+            width=width,
+            height=height,
+            frame=seed_frame,
+        )
+        reversed_layouts: list[CourtLayout | None] = []
+        for pending_frame, _pending_result, pending_raw_layout in reversed(pending_start):
+            reversed_layouts.append(
+                backward_tracker.update(
+                    pending_raw_layout,
+                    width=width,
+                    height=height,
+                    frame=pending_frame,
+                )
+            )
+        recovered = list(reversed(reversed_layouts))
+        for (pending_frame, pending_result, pending_raw_layout), recovered_layout in zip(
+            pending_start,
+            recovered,
+            strict=True,
+        ):
+            selected = (
+                recovered_layout
+                if recovered_layout is not None and recovered_layout.status == "ok"
+                else pending_raw_layout
+            )
+            if selected is not None and selected.status == "ok":
+                backfilled_start_frames += 1
+            write_result(pending_frame, pending_result, selected)
+        pending_start.clear()
+
     started = time.perf_counter()
     try:
         while True:
-            remaining = args.max_frames - frames_written if args.max_frames else None
+            remaining = args.max_frames - frames_read if args.max_frames else None
             if remaining is not None and remaining <= 0:
                 break
             frames = _read_batch(capture, args.batch_size, remaining)
@@ -196,17 +271,28 @@ def _predict_video(args: argparse.Namespace) -> int:
                         height=height,
                         frame=frame,
                     )
-                elif args.layout_every and frames_written % args.layout_every == 0:
+                elif args.layout_every and frames_read % args.layout_every == 0:
                     result = model.attach_layout(result)
                     layout = tracker.update(result.layout, width=width, height=height, frame=frame)
                 else:
                     layout = tracker.update(None, width=width, height=height, frame=frame)
-                result = result.with_layout(layout)
-                status = layout.status if layout is not None else "evidence"
-                layout_status_counts[status] = layout_status_counts.get(status, 0) + 1
-                writer.write(visualizer.draw(frame, result))
-                frames_written += 1
+                frames_read += 1
+                if (
+                    not acquired_layout
+                    and args.start_backfill_frames
+                    and (layout is None or layout.status != "ok")
+                ):
+                    pending_start.append((frame, result, layout))
+                    if len(pending_start) > args.start_backfill_frames:
+                        pending_frame, pending_result, pending_layout = pending_start.pop(0)
+                        write_result(pending_frame, pending_result, pending_layout)
+                    continue
+                if not acquired_layout and layout is not None and layout.status == "ok":
+                    backfill_pending(frame, layout)
+                    acquired_layout = True
+                write_result(frame, result, layout)
     finally:
+        flush_pending_without_backfill()
         capture.release()
         writer.close()
     wall_seconds = time.perf_counter() - started
@@ -220,6 +306,8 @@ def _predict_video(args: argparse.Namespace) -> int:
         "end_to_end_fps": frames_written / max(wall_seconds, 1e-9),
         "batch_size": args.batch_size,
         "layout_every": 1 if direct_layout else args.layout_every,
+        "start_backfill_frames": args.start_backfill_frames,
+        "backfilled_start_frames": backfilled_start_frames,
         "layout_status_counts": layout_status_counts,
         "video_codec": writer.codec,
         "device": str(model.device),
