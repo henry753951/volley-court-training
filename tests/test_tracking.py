@@ -180,9 +180,7 @@ def test_tracker_rejects_distant_semantic_ambiguity() -> None:
         [[0.0, -5.0, 100.0], [5.0, 0.0, 20.0], [0.0, 0.0, 1.0]],
         dtype=np.float64,
     )
-    tracker = CourtLayoutTracker(
-        LayoutTrackingConfig(smoothing=1.0, max_static_hold_frames=0)
-    )
+    tracker = CourtLayoutTracker(LayoutTrackingConfig(smoothing=1.0, max_static_hold_frames=0))
     tracker.update(_projected_layout(homography), width=400, height=200)
     distant_homography = homography.copy()
     distant_homography[0, 2] += 200.0
@@ -227,3 +225,30 @@ def test_tracker_keeps_homography_and_smoothed_keypoints_synchronized() -> None:
     )
     assert tracked.keypoints[0].x < tracked.keypoints[9].x
     assert tracked.keypoints[0].y > tracked.keypoints[4].y
+
+
+def test_tracker_uses_image_motion_as_prediction_before_model_measurement() -> None:
+    rng = np.random.default_rng(7)
+    first_frame = rng.integers(0, 256, size=(200, 300, 3), dtype=np.uint8)
+    image_motion = np.asarray([[1.0, 0.0, 5.0], [0.0, 1.0, 2.0]], dtype=np.float32)
+    second_frame = cv2.warpAffine(first_frame, image_motion, (300, 200))
+    first_homography = np.asarray(
+        [[10.0, 0.0, 20.0], [0.0, -5.0, 150.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    jittered_homography = first_homography.copy()
+    jittered_homography[0, 2] += 15.0
+    tracker = CourtLayoutTracker(LayoutTrackingConfig(smoothing=0.25))
+    tracker.update(_projected_layout(first_homography), width=300, height=200, frame=first_frame)
+
+    tracked = tracker.update(
+        _projected_layout(jittered_homography),
+        width=300,
+        height=200,
+        frame=second_frame,
+    )
+
+    assert tracked is not None
+    # The camera predicts x=25. The noisy model says x=35, so the 25% measurement
+    # correction should land near 27.5 instead of following the raw jump.
+    assert tracked.keypoints[0].x == pytest.approx(27.5, abs=1.0)

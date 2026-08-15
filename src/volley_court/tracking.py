@@ -17,17 +17,24 @@ from .types import CourtKeypoint, CourtLayout, Image
 class LayoutTrackingConfig:
     """Temporal smoothing for accepted court layouts."""
 
-    smoothing: float = 0.65
+    smoothing: float = 0.25
+    ambiguous_smoothing: float = 0.06
     fast_motion_threshold_px: float = 18.0
     max_identity_jump_ratio: float = 0.08
     max_hold_frames: int = 60
     max_static_hold_frames: int = 2
     reacquire_confirmation_frames: int = 3
     max_ambiguous_continuation_ratio: float = 0.03
+    flow_max_width: int = 512
+    flow_max_features: int = 256
+    flow_forward_backward_error_px: float = 1.5
+    flow_min_inlier_ratio: float = 0.6
 
     def __post_init__(self) -> None:
         if not 0.0 < self.smoothing <= 1.0:
             raise ValueError("smoothing must be in (0, 1]")
+        if not 0.0 < self.ambiguous_smoothing <= 1.0:
+            raise ValueError("ambiguous_smoothing must be in (0, 1]")
         if self.fast_motion_threshold_px <= 0.0:
             raise ValueError("fast_motion_threshold_px must be positive")
         if not 0.0 < self.max_identity_jump_ratio < 1.0:
@@ -40,6 +47,14 @@ class LayoutTrackingConfig:
             raise ValueError("reacquire_confirmation_frames must be positive")
         if not 0.0 < self.max_ambiguous_continuation_ratio < 1.0:
             raise ValueError("max_ambiguous_continuation_ratio must be in (0, 1)")
+        if self.flow_max_width < 160:
+            raise ValueError("flow_max_width must be at least 160")
+        if self.flow_max_features < 20:
+            raise ValueError("flow_max_features must be at least 20")
+        if self.flow_forward_backward_error_px <= 0.0:
+            raise ValueError("flow_forward_backward_error_px must be positive")
+        if not 0.0 < self.flow_min_inlier_ratio <= 1.0:
+            raise ValueError("flow_min_inlier_ratio must be in (0, 1]")
 
 
 class CourtLayoutTracker:
@@ -72,6 +87,8 @@ class CourtLayoutTracker:
         frame: Image | None = None,
     ) -> CourtLayout | None:
         gray = self._gray(frame) if frame is not None else None
+        predicted = self._track_frame(gray, width=width, height=height)
+        reference = predicted or self._current
         if layout is not None and layout.status == "ok" and len(layout.keypoints) == 36:
             layout = self._canonicalize_layout(layout, width=width, height=height)
         if layout is not None and layout.status == "ok" and len(layout.keypoints) == 36:
@@ -82,7 +99,12 @@ class CourtLayoutTracker:
                     width=width,
                     height=height,
                 )
-            identity_match = self._match_identity(layout, width=width, height=height)
+            identity_match = self._match_identity(
+                layout,
+                width=width,
+                height=height,
+                reference=reference,
+            )
             if identity_match is not None:
                 direct_distance = identity_match
                 if direct_distance > self.config.max_identity_jump_ratio:
@@ -93,14 +115,35 @@ class CourtLayoutTracker:
                         height=height,
                     )
             self._clear_pending()
-            self._current = self._smooth(layout, width=width, height=height)
+            self._current = self._smooth(
+                layout,
+                width=width,
+                height=height,
+                reference=reference,
+                alpha=self.config.smoothing if predicted is not None else None,
+            )
             self._missed_frames = 0
             self._previous_gray = gray
             return self._current
-        continuation = self._ambiguous_continuation(layout, width=width, height=height)
+        continuation = self._ambiguous_continuation(
+            layout,
+            width=width,
+            height=height,
+            reference=reference,
+        )
         if continuation is not None:
             self._clear_pending()
-            self._current = self._smooth(continuation, width=width, height=height)
+            self._current = self._smooth(
+                continuation,
+                width=width,
+                height=height,
+                reference=reference,
+                alpha=(
+                    self.config.ambiguous_smoothing
+                    if predicted is not None
+                    else self.config.smoothing
+                ),
+            )
             self._current = replace(
                 self._current,
                 score=min(self._current.score, continuation.score) * 0.995,
@@ -112,9 +155,8 @@ class CourtLayoutTracker:
         self._clear_pending()
         if self._current is not None and self._missed_frames < self.config.max_hold_frames:
             self._missed_frames += 1
-            tracked = self._track_frame(gray, width=width, height=height)
-            if tracked is not None:
-                self._current = tracked
+            if predicted is not None:
+                self._current = predicted
                 self._previous_gray = gray
                 return self._current
             if self._missed_frames <= self.config.max_static_hold_frames:
@@ -138,6 +180,7 @@ class CourtLayoutTracker:
         *,
         width: int,
         height: int,
+        reference: CourtLayout | None = None,
     ) -> CourtLayout | None:
         if (
             self._current is None
@@ -158,7 +201,12 @@ class CourtLayoutTracker:
         canonical = self._canonicalize_layout(promoted, width=width, height=height)
         if canonical is None:
             return None
-        distance = self._match_identity(canonical, width=width, height=height)
+        distance = self._match_identity(
+            canonical,
+            width=width,
+            height=height,
+            reference=reference,
+        )
         if distance is None or distance > self.config.max_ambiguous_continuation_ratio:
             return None
         return canonical
@@ -199,7 +247,9 @@ class CourtLayoutTracker:
                 tracked,
                 reason="tracked through pending layout discontinuity",
             )
-        elif self._current is not None and self._missed_frames <= self.config.max_static_hold_frames:
+        elif (
+            self._current is not None and self._missed_frames <= self.config.max_static_hold_frames
+        ):
             self._current = replace(
                 self._current,
                 score=self._current.score * 0.985,
@@ -246,10 +296,12 @@ class CourtLayoutTracker:
         *,
         width: int,
         height: int,
+        reference: CourtLayout | None = None,
     ) -> float | None:
-        if self._current is None or len(self._current.keypoints) != 36:
+        reference = reference or self._current
+        if reference is None or len(reference.keypoints) != 36:
             return None
-        previous = {point.id: point for point in self._current.keypoints}
+        previous = {point.id: point for point in reference.keypoints}
         candidate = {point.id: point for point in layout.keypoints}
         if len(previous) != 36 or len(candidate) != 36:
             return None
@@ -338,9 +390,15 @@ class CourtLayoutTracker:
             ),
         )
 
-    @staticmethod
-    def _gray(frame: Image) -> NDArray[np.uint8]:
-        return np.asarray(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), dtype=np.uint8)
+    def _gray(self, frame: Image) -> NDArray[np.uint8]:
+        gray = np.asarray(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), dtype=np.uint8)
+        if gray.shape[1] <= self.config.flow_max_width:
+            return gray
+        scale = self.config.flow_max_width / gray.shape[1]
+        return np.asarray(
+            cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA),
+            dtype=np.uint8,
+        )
 
     def _track_frame(
         self,
@@ -351,19 +409,21 @@ class CourtLayoutTracker:
     ) -> CourtLayout | None:
         if self._current is None or self._previous_gray is None or gray is None:
             return None
-        visible = [
-            point
-            for point in self._current.keypoints
-            if 2.0 <= point.x < width - 2.0 and 2.0 <= point.y < height - 2.0
-        ]
-        if len(visible) < 4:
+        previous_points_raw = cv2.goodFeaturesToTrack(
+            self._previous_gray,
+            maxCorners=self.config.flow_max_features,
+            qualityLevel=0.01,
+            minDistance=7.0,
+            blockSize=7,
+        )
+        if previous_points_raw is None or len(previous_points_raw) < 20:
             return None
-        previous_points = np.asarray([(point.x, point.y) for point in visible], dtype=np.float32)
-        next_guess = np.empty_like(previous_points.reshape(-1, 1, 2))
+        previous_points = np.asarray(previous_points_raw, dtype=np.float32).reshape(-1, 1, 2)
+        next_guess = np.empty_like(previous_points)
         next_points_raw, status_raw, _errors = cv2.calcOpticalFlowPyrLK(
             self._previous_gray,
             gray,
-            previous_points.reshape(-1, 1, 2),
+            previous_points,
             next_guess,
             winSize=(31, 31),
             maxLevel=3,
@@ -371,49 +431,57 @@ class CourtLayoutTracker:
         )
         if next_points_raw is None or status_raw is None:
             return None
-        next_points = np.asarray(next_points_raw, dtype=np.float32).reshape(-1, 2)
-        status = np.asarray(status_raw, dtype=np.uint8).reshape(-1).astype(bool)
-        valid_previous = previous_points[status]
-        valid_next = next_points[status]
-        if len(valid_previous) < 4:
+        backward_guess = np.empty_like(previous_points)
+        backward_points_raw, backward_status_raw, _ = cv2.calcOpticalFlowPyrLK(
+            gray,
+            self._previous_gray,
+            next_points_raw,
+            backward_guess,
+            winSize=(31, 31),
+            maxLevel=3,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 24, 0.01),
+        )
+        if backward_points_raw is None or backward_status_raw is None:
             return None
-        delta_raw, mask_raw = cv2.findHomography(
+        previous_flat = previous_points.reshape(-1, 2)
+        next_flat = np.asarray(next_points_raw, dtype=np.float32).reshape(-1, 2)
+        backward_flat = np.asarray(backward_points_raw, dtype=np.float32).reshape(-1, 2)
+        status = np.asarray(status_raw, dtype=np.uint8).reshape(-1).astype(bool)
+        backward_status = np.asarray(backward_status_raw, dtype=np.uint8).reshape(-1).astype(bool)
+        forward_backward_error = np.linalg.norm(previous_flat - backward_flat, axis=1)
+        valid = (
+            status
+            & backward_status
+            & np.isfinite(next_flat).all(axis=1)
+            & (forward_backward_error <= self.config.flow_forward_backward_error_px)
+        )
+        valid_previous = previous_flat[valid]
+        valid_next = next_flat[valid]
+        if len(valid_previous) < 20:
+            return None
+        delta_small_raw, mask_raw = cv2.findHomography(
             valid_previous,
             valid_next,
             method=cv2.RANSAC,
-            ransacReprojThreshold=3.0,
+            ransacReprojThreshold=2.0,
         )
-        if delta_raw is None or mask_raw is None:
+        if delta_small_raw is None or mask_raw is None:
             return None
         inliers = int(np.count_nonzero(np.asarray(mask_raw).reshape(-1)))
-        if inliers < max(4, math.ceil(0.5 * len(valid_previous))):
+        if inliers < max(20, math.ceil(self.config.flow_min_inlier_ratio * len(valid_previous))):
             return None
         median_flow = median(
             float(math.hypot(*(second - first)))
             for first, second in zip(valid_previous, valid_next, strict=True)
         )
-        if median_flow > 0.12 * math.hypot(width, height):
+        if median_flow > 0.12 * math.hypot(gray.shape[1], gray.shape[0]):
             return None
-        delta = np.asarray(delta_raw, dtype=np.float64)
-        all_points = np.asarray(
-            [(point.x, point.y) for point in self._current.keypoints],
-            dtype=np.float64,
-        ).reshape(-1, 1, 2)
-        projected = np.asarray(
-            cv2.perspectiveTransform(all_points, delta), dtype=np.float64
-        ).reshape(-1, 2)
-        if not np.isfinite(projected).all():
-            return None
-        points = tuple(
-            replace(
-                point,
-                x=float(position[0]),
-                y=float(position[1]),
-                in_frame=(0.0 <= float(position[0]) < width and 0.0 <= float(position[1]) < height),
-                source="temporal_optical_flow",
-            )
-            for point, position in zip(self._current.keypoints, projected, strict=True)
-        )
+        delta_small = np.asarray(delta_small_raw, dtype=np.float64)
+        scale_x = gray.shape[1] / width
+        scale_y = gray.shape[0] / height
+        to_small = np.diag((scale_x, scale_y, 1.0))
+        to_full = np.diag((1.0 / scale_x, 1.0 / scale_y, 1.0))
+        delta = to_full @ delta_small @ to_small
         homography = self._current.homography
         if homography is not None:
             composed = delta @ np.asarray(homography, dtype=np.float64)
@@ -426,31 +494,35 @@ class CourtLayoutTracker:
                 reason="tracked with optical flow",
             )
             if synchronized is not None:
-                return replace(synchronized, score=self._current.score * 0.995)
-        return replace(
-            self._current,
-            keypoints=points,
-            homography=homography,
-            score=self._current.score * 0.995,
-            reason="tracked with optical flow",
-        )
+                return replace(synchronized, score=self._current.score * 0.999)
+        return None
 
-    def _smooth(self, layout: CourtLayout, *, width: int, height: int) -> CourtLayout:
-        if self._current is None or len(self._current.keypoints) != len(layout.keypoints):
+    def _smooth(
+        self,
+        layout: CourtLayout,
+        *,
+        width: int,
+        height: int,
+        reference: CourtLayout | None = None,
+        alpha: float | None = None,
+    ) -> CourtLayout:
+        reference = reference or self._current
+        if reference is None or len(reference.keypoints) != len(layout.keypoints):
             return layout
-        previous = {point.id: point for point in self._current.keypoints}
+        previous = {point.id: point for point in reference.keypoints}
         displacements = [
             math.hypot(point.x - previous[point.id].x, point.y - previous[point.id].y)
             for point in layout.keypoints
             if point.id in previous
         ]
         motion = median(displacements) if displacements else 0.0
-        alpha = min(
-            0.95,
-            self.config.smoothing
-            + (1.0 - self.config.smoothing)
-            * min(motion / self.config.fast_motion_threshold_px, 1.0),
-        )
+        if alpha is None:
+            alpha = min(
+                0.95,
+                self.config.smoothing
+                + (1.0 - self.config.smoothing)
+                * min(motion / self.config.fast_motion_threshold_px, 1.0),
+            )
         points = tuple(
             self._smooth_point(
                 point,
@@ -461,7 +533,7 @@ class CourtLayoutTracker:
             )
             for point in layout.keypoints
         )
-        if layout.homography is not None and self._current.homography is not None:
+        if layout.homography is not None and reference.homography is not None:
             by_id = {point.id: point for point in points}
             outer_ids = (0, 4, 5, 9)
             if all(index in by_id for index in outer_ids):
@@ -500,9 +572,9 @@ class CourtLayoutTracker:
             return None
         matrix /= scale
         canonical = np.asarray(CANONICAL_KEYPOINTS, dtype=np.float64).reshape(-1, 1, 2)
-        projected = np.asarray(cv2.perspectiveTransform(canonical, matrix), dtype=np.float64).reshape(
-            -1, 2
-        )
+        projected = np.asarray(
+            cv2.perspectiveTransform(canonical, matrix), dtype=np.float64
+        ).reshape(-1, 2)
         if not np.isfinite(projected).all():
             return None
         by_id = {point.id: point for point in layout.keypoints}

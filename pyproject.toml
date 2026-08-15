@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "volley-court-lines"
-version = "0.3.1"
+version = "0.3.2"
 description = "Fast typed volleyball court layout inference, visualization, and training"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"

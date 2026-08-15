@@ -4,7 +4,7 @@ Keep one `CourtLineModel` alive per worker process. Model construction loads the
 allocates CUDA state; it should not happen per frame.
 
 ```python
-from volley_court import CourtLineModel
+from volley_court import CourtLayoutTracker, CourtLineModel
 from volleyball_analysis_engine.inference import COURT_WORLD_POINTS
 from volleyball_analysis_engine.records import CourtFrame, CourtKeypoint
 
@@ -17,10 +17,18 @@ class CourtEstimator:
             image_size=512,
             include_layout=True,
         )
+        self.tracker = CourtLayoutTracker()
 
     def infer(self, frame, frame_index: int) -> CourtFrame | None:
         result = self.model.predict(frame)
-        if result.layout is None or result.layout.status != "ok":
+        height, width = frame.shape[:2]
+        layout = self.tracker.update(
+            result.layout,
+            width=width,
+            height=height,
+            frame=frame,
+        )
+        if layout is None or layout.status != "ok":
             return None
         keypoints = tuple(
             CourtKeypoint(
@@ -31,7 +39,7 @@ class CourtEstimator:
                     COURT_WORLD_POINTS[point.id] if point.id < len(COURT_WORLD_POINTS) else None
                 ),
             )
-            for point in result.layout.keypoints
+            for point in layout.keypoints
         )
         return CourtFrame(frame_index=frame_index, available=True, keypoints=keypoints)
 ```
@@ -59,12 +67,21 @@ left/up and court width points right/down along whichever image component is dom
 left/right and near/far identity stable in both side and end views. Keypoints are always reprojected
 from the same smoothed homography returned to the caller.
 
+On every frame, the tracker first predicts the homography from forward/backward-checked background
+features and then treats the model layout as a correcting measurement. Confirmed measurements use a
+25% correction; semantic-only ambiguous measurements use 6%. This follows real camera motion while
+preventing one noisy model frame from moving the court directly.
+
 After acquisition, a semantic-only ambiguous frame may continue the layout only when it still has
-at least five matched physical lines and its canonical homography is within 3% of the previous
-layout. Optical flow may bridge up to 60 frames; an untracked static layout is held for at most two
-frames. Large jumps require three consistent accepted frames before re-anchoring. These rules never
-bootstrap a court from ambiguous evidence. Feed frames in source order and reset the tracker at an
-explicit stream boundary.
+at least five matched physical lines and its canonical homography is within 3% of the motion
+prediction. Global optical flow may bridge up to 60 frames; an untracked static layout is held for at
+most two frames. Large jumps require three consistent accepted frames before re-anchoring. These
+rules never bootstrap a court from ambiguous evidence. Feed frames in source order and reset the
+tracker at an explicit stream boundary.
+
+`volley-court predict-video` additionally buffers up to 150 leading frames and tracks backward from
+the first trustworthy layout. This is offline-only and stops at a hard camera cut; realtime callers
+never inspect future frames. Pass `--start-backfill-frames 0` to disable it.
 
 ## Deployment knobs
 
